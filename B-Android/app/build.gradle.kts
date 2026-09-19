@@ -5,14 +5,14 @@ plugins {
 
 android {
     namespace = "com.nevus.quetta"
-    compileSdk = 35
+    compileSdk = 36
     ndkVersion = "27.2.12479018"
     defaultConfig {
         applicationId = "com.nevus.quetta"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 122
-        versionName = "1.2.2"
+        targetSdk = 36
+        versionCode = 900
+        versionName = "0.9.0-ab"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
             cmake {
@@ -28,22 +28,34 @@ android {
             version = "3.22.1"
         }
     }
-    signingConfigs {
-        create("lab") {
-            storeFile = rootProject.file("keystore/lab.jks")
-            storePassword = "nevuslab122"
-            keyAlias = "nevuslab"
-            keyPassword = "nevuslab122"
+    val releaseStore = providers.environmentVariable("NEVUS_RELEASE_STORE")
+    val releaseStorePassword = providers.environmentVariable("NEVUS_RELEASE_STORE_PASSWORD")
+    val releaseAlias = providers.environmentVariable("NEVUS_RELEASE_ALIAS")
+    val releaseKeyPassword = providers.environmentVariable("NEVUS_RELEASE_KEY_PASSWORD")
+    val hasReleaseSigning = listOf(
+        releaseStore,
+        releaseStorePassword,
+        releaseAlias,
+        releaseKeyPassword,
+    ).all { it.isPresent && it.get().isNotBlank() }
+
+    val releaseSigning = if (hasReleaseSigning) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseStore.get())
+            storePassword = releaseStorePassword.get()
+            keyAlias = releaseAlias.get()
+            keyPassword = releaseKeyPassword.get()
         }
+    } else {
+        null
     }
     buildTypes {
         debug {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("lab")
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("lab")
+            signingConfig = releaseSigning
         }
     }
     compileOptions {
@@ -62,5 +74,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.10.0")
     implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.room:room-runtime:2.7.2")
+    implementation("androidx.room:room-ktx:2.7.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("androidx.webkit:webkit:1.14.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }
