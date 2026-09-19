@@ -1,19 +1,19 @@
 package com.nevus.quetta
 
-import android.app.DownloadManager
-import android.content.Context
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
-import android.webkit.URLUtil
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebStorage
@@ -22,69 +22,176 @@ import android.webkit.WebViewClient
 import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import com.nevus.quetta.browser.BrowserCoordinator
+import com.nevus.quetta.data.BrowserDatabase
+import com.nevus.quetta.data.BrowserRepository
 import com.nevus.quetta.databinding.ActivityMainBinding
+import com.nevus.quetta.download.DownloadCoordinator
+import com.nevus.quetta.download.DownloadResult
 import com.nevus.quetta.navigation.NavigationController
 import com.nevus.quetta.navigation.NavigationTarget
+import com.nevus.quetta.tabs.BrowserTab
+import com.nevus.quetta.tabs.TabManager
+import com.nevus.quetta.tabs.TabState
 import com.nevus.quetta.web.MediaBridgeHost
 import com.nevus.quetta.web.MediaCandidate
+import com.nevus.quetta.web.PrivateProfileUnsupportedException
 import com.nevus.quetta.web.SecureWebViewFactory
+import com.nevus.quetta.web.WebViewSessionManager
 import java.io.ByteArrayInputStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private lateinit var mediaBridgeHost: MediaBridgeHost
+    private lateinit var coordinator: BrowserCoordinator
+    private lateinit var sessions: WebViewSessionManager
+    private lateinit var downloads: DownloadCoordinator
+
+    private val bridgeHosts = mutableMapOf<String, MediaBridgeHost>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val startPage = "https://www.google.com/"
     private val prefs by lazy { getSharedPreferences("nevus", MODE_PRIVATE) }
     private val navigation = NavigationController()
+
+    private var currentWebView: WebView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applySystemInsets()
 
-        runCatching { NativeGuard.loadRuleset(this) }
-        configureWebView()
+        val repository = BrowserRepository(BrowserDatabase.get(this))
+        coordinator = BrowserCoordinator(
+            tabs = TabManager(startPage),
+            repository = repository,
+            homeUrl = startPage,
+        )
+        sessions = WebViewSessionManager(this)
+        downloads = DownloadCoordinator(this)
+
         configureActions()
+        configureBackHandling()
 
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (binding.webView.canGoBack()) binding.webView.goBack() else finish()
-            }
-        })
+        scope.launch {
+            val fallback = intent?.dataString
+                ?: prefs.getString("lastUrl", startPage)
+            coordinator.restoreSession(fallback)
+            coordinator.tabs.state.collectLatest(::renderState)
+        }
+    }
 
-        if (savedInstanceState == null) {
-            navigate(intent?.dataString ?: prefs.getString("lastUrl", startPage).orEmpty().ifBlank { startPage })
-        } else {
-            val restored = binding.webView.restoreState(savedInstanceState)
-            if (restored == null) navigate(prefs.getString("lastUrl", startPage).orEmpty().ifBlank { startPage })
+    private fun applySystemInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
         }
     }
 
     private fun configureActions() {
         binding.back.setOnClickListener {
-            if (binding.webView.canGoBack()) binding.webView.goBack()
+            currentWebView?.takeIf(WebView::canGoBack)?.goBack()
         }
-        binding.reload.setOnClickListener { binding.webView.reload() }
+        binding.forward.setOnClickListener {
+            currentWebView?.takeIf(WebView::canGoForward)?.goForward()
+        }
+        binding.home.setOnClickListener { navigate(startPage) }
+        binding.reload.setOnClickListener { currentWebView?.reload() }
+        binding.bookmark.setOnClickListener { addCurrentBookmark() }
+        binding.tabs.setOnClickListener { showTabsDialog() }
         binding.menu.setOnClickListener { showMenu(it) }
-        binding.address.setOnEditorActionListener { _, _, event ->
-            if (event == null || event.keyCode == KeyEvent.KEYCODE_ENTER) {
-                navigate(binding.address.text.toString())
-                true
-            } else {
-                false
-            }
+        binding.errorState.setOnClickListener { currentWebView?.reload() }
+        binding.address.setOnEditorActionListener { _, actionId, event ->
+            val go = actionId == EditorInfo.IME_ACTION_GO ||
+                event?.keyCode == KeyEvent.KEYCODE_ENTER
+            if (go) navigate(binding.address.text.toString())
+            go
         }
     }
 
-    private fun configureWebView() = with(binding.webView) {
-        SecureWebViewFactory.harden(this, debuggingEnabled = BuildConfig.DEBUG)
-        mediaBridgeHost = MediaBridgeHost(this@MainActivity, this) { candidate ->
-            runOnUiThread { offerDownload(candidate) }
+    private fun configureBackHandling() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val webView = currentWebView
+                when {
+                    webView?.canGoBack() == true -> webView.goBack()
+                    coordinator.tabs.state.value.tabs.size > 1 -> closeActiveTab()
+                    else -> finish()
+                }
+            }
+        })
+    }
+
+    private fun renderState(state: TabState) {
+        binding.tabs.text = state.tabs.size.toString()
+        binding.privateIndicator.visibility =
+            if (state.activeTab.isPrivate) View.VISIBLE else View.GONE
+        showActiveTab(state.activeTab)
+        trimInactiveSessions(state, maxResident = 4)
+    }
+
+    private fun showActiveTab(tab: BrowserTab) {
+        currentWebView?.onPause()
+
+        val webView = try {
+            sessions.obtain(tab) { created -> configureWebView(tab.id, created) }
+        } catch (_: PrivateProfileUnsupportedException) {
+            Toast.makeText(this, R.string.private_unsupported, Toast.LENGTH_LONG).show()
+            scope.launch { coordinator.closeTab(tab.id) }
+            return
         }
 
-        webChromeClient = object : WebChromeClient() {
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        binding.webContainer.removeAllViews()
+        binding.webContainer.addView(
+            webView,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        currentWebView = webView
+        binding.address.setText(webView.url ?: tab.url)
+        binding.errorState.visibility = View.GONE
+        updateNavigationButtons(webView)
+
+        if (webView.url == null) {
+            runCatching { Uri.parse(tab.url) }
+                .getOrNull()
+                ?.let { bridgeHosts[tab.id]?.prepareFor(it) }
+            webView.loadUrl(tab.url)
+        }
+
+        webView.onResume()
+    }
+
+    private fun configureWebView(tabId: String, webView: WebView) {
+        SecureWebViewFactory.harden(webView, debuggingEnabled = BuildConfig.DEBUG)
+        val bridge = MediaBridgeHost(this, webView) { candidate ->
+            runOnUiThread {
+                if (coordinator.tabs.state.value.activeTabId == tabId) {
+                    offerDownload(tabId, candidate)
+                }
+            }
+        }
+        bridgeHosts[tabId] = bridge
+
+        webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                if (coordinator.tabs.state.value.activeTabId != tabId) return
                 binding.progress.progress = newProgress
                 binding.progress.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
             }
@@ -101,16 +208,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView,
+                request: WebResourceRequest,
+            ): Boolean {
                 if (!request.isForMainFrame) return false
                 return when (request.url.scheme?.lowercase()) {
                     "https" -> {
-                        mediaBridgeHost.prepareFor(request.url)
+                        bridge.prepareFor(request.url)
                         false
                     }
                     "http" -> {
-                        navigate(request.url.toString())
+                        navigateOn(tabId, request.url.toString())
                         true
                     }
                     else -> true
@@ -121,8 +231,7 @@ class MainActivity : AppCompatActivity() {
                 view: WebView,
                 request: WebResourceRequest,
             ): WebResourceResponse? {
-                val host = request.url.host.orEmpty()
-                return if (NativeGuard.isBlockedHost(host)) {
+                return if (NativeGuard.isBlockedHost(request.url.host.orEmpty())) {
                     WebResourceResponse(
                         "text/plain",
                         "utf-8",
@@ -137,38 +246,170 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                binding.address.setText(url)
-                binding.back.isEnabled = view.canGoBack()
-                if (url.startsWith("https://")) {
+                val tab = coordinator.tabs.tab(tabId) ?: return
+                scope.launch {
+                    coordinator.pageFinished(tabId, url, view.title)
+                }
+                if (!tab.isPrivate && url.startsWith("https://")) {
                     prefs.edit().putString("lastUrl", url).apply()
+                }
+                if (coordinator.tabs.state.value.activeTabId == tabId) {
+                    binding.address.setText(url)
+                    binding.errorState.visibility = View.GONE
+                    updateNavigationButtons(view)
+                }
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError,
+            ) {
+                if (request.isForMainFrame &&
+                    coordinator.tabs.state.value.activeTabId == tabId
+                ) {
+                    binding.errorState.visibility = View.VISIBLE
                 }
             }
         }
 
-        setDownloadListener(DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            download(url, userAgent, contentDisposition, mimeType)
+        webView.setDownloadListener(DownloadListener {
+                url,
+                userAgent,
+                contentDisposition,
+                mimeType,
+                _ ->
+            handleDownloadResult(
+                downloads.enqueue(
+                    url = url,
+                    userAgent = userAgent,
+                    contentDisposition = contentDisposition,
+                    mimeType = mimeType,
+                    sourcePage = webView.url,
+                ),
+            )
         })
     }
 
     private fun navigate(raw: String) {
+        val tabId = coordinator.tabs.state.value.activeTabId
+        navigateOn(tabId, raw)
+    }
+
+    private fun navigateOn(tabId: String, raw: String) {
         when (val target = navigation.resolve(raw)) {
             is NavigationTarget.Rejected -> {
                 Toast.makeText(this, target.reason, Toast.LENGTH_SHORT).show()
             }
             else -> {
-                mediaBridgeHost.prepareFor(target.uri)
-                binding.webView.loadUrl(target.uri.toString())
+                val webView = sessions.existing(tabId) ?: return
+                bridgeHosts[tabId]?.prepareFor(target.uri)
+                binding.errorState.visibility = View.GONE
+                webView.loadUrl(target.uri.toString())
             }
         }
     }
 
+    private fun updateNavigationButtons(webView: WebView) {
+        binding.back.isEnabled = webView.canGoBack()
+        binding.forward.isEnabled = webView.canGoForward()
+    }
+
+    private fun addCurrentBookmark() {
+        val tabId = coordinator.tabs.state.value.activeTabId
+        scope.launch {
+            val saved = coordinator.addBookmark(tabId)
+            val message = if (saved == null) {
+                "Bookmark tidak disimpan dari tab privat"
+            } else {
+                "Bookmark tersimpan"
+            }
+            Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun showTabsDialog() {
+        val state = coordinator.tabs.state.value
+        val labels = state.tabs.mapIndexed { index, tab ->
+            val privacy = if (tab.isPrivate) "[Privat] " else ""
+            val title = tab.title.ifBlank { tab.url }
+            (index + 1).toString() + ". " + privacy + title
+        }.toTypedArray()
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.tabs_title)
+            .setItems(labels) { _, which ->
+                scope.launch { coordinator.selectTab(state.tabs[which].id) }
+            }
+            .setPositiveButton(R.string.new_tab) { _, _ ->
+                scope.launch { coordinator.newTab(isPrivate = false) }
+            }
+            .setNegativeButton(R.string.close_active_tab) { _, _ ->
+                closeActiveTab()
+            }
+            .show()
+    }
+
+    private fun showBookmarks() {
+        scope.launch {
+            val items = coordinator.bookmarks().first()
+            if (items.isEmpty()) {
+                Toast.makeText(this@MainActivity, R.string.no_bookmarks, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = items.map { it.title.ifBlank { it.url } }.toTypedArray()
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(R.string.bookmarks_title)
+                .setItems(labels) { _, which -> navigate(items[which].url) }
+                .show()
+        }
+    }
+
+    private fun showHistory() {
+        scope.launch {
+            val items = coordinator.history().first()
+            if (items.isEmpty()) {
+                Toast.makeText(this@MainActivity, R.string.no_history, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = items.map { it.title.ifBlank { it.url } }.toTypedArray()
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(R.string.history_title)
+                .setItems(labels) { _, which -> navigate(items[which].url) }
+                .show()
+        }
+    }
+
     private fun showMenu(anchor: View) = PopupMenu(this, anchor).apply {
-        menu.add("Beranda").setOnMenuItemClickListener {
-            navigate(startPage)
+        menu.add(getString(R.string.new_tab)).setOnMenuItemClickListener {
+            scope.launch { coordinator.newTab(isPrivate = false) }
+            true
+        }
+        menu.add(getString(R.string.new_private_tab)).setOnMenuItemClickListener {
+            if (!sessions.supportsPrivateProfiles()) {
+                Toast.makeText(this@MainActivity, R.string.private_unsupported, Toast.LENGTH_LONG).show()
+            } else {
+                scope.launch { coordinator.newTab(isPrivate = true) }
+            }
+            true
+        }
+        menu.add(getString(R.string.bookmarks_title)).setOnMenuItemClickListener {
+            showBookmarks()
+            true
+        }
+        menu.add(getString(R.string.history_title)).setOnMenuItemClickListener {
+            showHistory()
+            true
+        }
+        menu.add("Hapus riwayat").setOnMenuItemClickListener {
+            scope.launch {
+                coordinator.clearHistory()
+                Toast.makeText(this@MainActivity, "Riwayat dihapus", Toast.LENGTH_SHORT).show()
+            }
             true
         }
         menu.add("Brankas").setOnMenuItemClickListener {
-            val ok = if (DataVault.isUnlocked()) true else DataVault.unlock(this@MainActivity)
+            val ok = DataVault.isUnlocked() || DataVault.unlock(this@MainActivity)
             val msg = if (ok) DataVault.lockedSlots(this@MainActivity) else "Vault terkunci"
             Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
             true
@@ -180,59 +421,83 @@ class MainActivity : AppCompatActivity() {
         }
         menu.add("Hapus data sesi").setOnMenuItemClickListener {
             clearSessionData()
-            Toast.makeText(this@MainActivity, "Data sesi dihapus", Toast.LENGTH_SHORT).show()
             true
         }
         show()
     }
 
+    private fun closeActiveTab() {
+        val id = coordinator.tabs.state.value.activeTabId
+        bridgeHosts.remove(id)?.clear()
+        sessions.release(id)
+        if (currentWebView?.parent == null) currentWebView = null
+        scope.launch { coordinator.closeTab(id) }
+    }
+
     private fun clearSessionData() {
-        binding.webView.clearHistory()
-        binding.webView.clearCache(true)
-        binding.webView.clearFormData()
+        bridgeHosts.values.forEach(MediaBridgeHost::clear)
+        bridgeHosts.clear()
+        sessions.destroyAll()
+        currentWebView = null
+        binding.webContainer.removeAllViews()
+        prefs.edit().remove("lastUrl").apply()
         WebStorage.getInstance().deleteAllData()
         CookieManager.getInstance().removeAllCookies {
             CookieManager.getInstance().flush()
         }
+
+        scope.launch {
+            coordinator.clearHistory()
+            coordinator.resetSession()
+            Toast.makeText(this@MainActivity, R.string.session_cleared, Toast.LENGTH_LONG).show()
+        }
     }
 
-    private fun offerDownload(candidate: MediaCandidate) {
-        Toast.makeText(
-            this,
-            "Media HTTPS terdeteksi: ${candidate.url.host.orEmpty()}",
-            Toast.LENGTH_SHORT,
-        ).show()
+    private fun offerDownload(tabId: String, candidate: MediaCandidate) {
+        val webView = sessions.existing(tabId) ?: return
+        val label = candidate.url.lastPathSegment
+            ?.takeIf { it.isNotBlank() }
+            ?: candidate.url.host.orEmpty()
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.download_media_title)
+            .setMessage(label)
+            .setPositiveButton(R.string.download_action) { _, _ ->
+                handleDownloadResult(
+                    downloads.enqueue(
+                        url = candidate.url.toString(),
+                        userAgent = webView.settings.userAgentString,
+                        contentDisposition = null,
+                        mimeType = null,
+                        sourcePage = webView.url,
+                    ),
+                )
+            }
+            .setNegativeButton(R.string.cancel_action, null)
+            .show()
     }
 
-    private fun download(url: String, userAgent: String, disposition: String, mime: String) {
-        if (!url.startsWith("https://")) {
-            Toast.makeText(this, "Hanya unduhan HTTPS diizinkan", Toast.LENGTH_SHORT).show()
-            return
+    private fun handleDownloadResult(result: DownloadResult) {
+        val message = when (result) {
+            is DownloadResult.Enqueued -> "Unduhan dimulai: " + result.fileName
+            is DownloadResult.Rejected -> result.reason
+            is DownloadResult.Failed -> "Unduhan gagal: " + result.reason
         }
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
 
-        val fileName = URLUtil.guessFileName(url, disposition, mime).take(180).ifBlank { "download" }
-        val request = DownloadManager.Request(Uri.parse(url)).apply {
-            addRequestHeader("User-Agent", userAgent)
-            CookieManager.getInstance().getCookie(url)
-                ?.takeIf { it.isNotBlank() }
-                ?.let { addRequestHeader("Cookie", it) }
-            binding.webView.url
-                ?.takeIf { it.startsWith("https://") }
-                ?.let { addRequestHeader("Referer", it) }
-            setMimeType(mime)
-            setTitle(fileName)
-            setDescription("NevusQuetta download")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-        }
+    private fun trimInactiveSessions(state: TabState, maxResident: Int) {
+        val resident = state.tabs.filter { sessions.existing(it.id) != null }
+        if (resident.size <= maxResident) return
 
-        runCatching {
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-        }.onSuccess {
-            Toast.makeText(this, "Unduhan dimulai", Toast.LENGTH_SHORT).show()
-        }.onFailure {
-            Toast.makeText(this, "Unduhan gagal dimulai", Toast.LENGTH_SHORT).show()
-        }
+        resident
+            .filter { it.id != state.activeTabId }
+            .sortedBy { it.lastAccessedAt }
+            .take(resident.size - maxResident)
+            .forEach { tab ->
+                bridgeHosts.remove(tab.id)?.clear()
+                sessions.release(tab.id)
+            }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -243,23 +508,23 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (::binding.isInitialized) {
-            binding.webView.onResume()
-            binding.webView.resumeTimers()
+        if (::coordinator.isInitialized) {
+            sessions.resumeActive(coordinator.tabs.state.value.activeTabId)
         }
     }
 
     override fun onPause() {
-        if (::binding.isInitialized) {
-            binding.webView.onPause()
-            binding.webView.pauseTimers()
-        }
+        if (::sessions.isInitialized) sessions.pauseAll()
         super.onPause()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        binding.webView.saveState(outState)
-        super.onSaveInstanceState(outState)
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::coordinator.isInitialized &&
+            level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
+        ) {
+            trimInactiveSessions(coordinator.tabs.state.value, maxResident = 2)
+        }
     }
 
     override fun onStop() {
@@ -268,11 +533,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        if (::mediaBridgeHost.isInitialized) mediaBridgeHost.clear()
-        if (::binding.isInitialized) {
-            binding.webView.stopLoading()
-            binding.webView.destroy()
-        }
+        bridgeHosts.values.forEach(MediaBridgeHost::clear)
+        bridgeHosts.clear()
+        if (::sessions.isInitialized) sessions.destroyAll()
+        scope.cancel()
         super.onDestroy()
     }
 }
