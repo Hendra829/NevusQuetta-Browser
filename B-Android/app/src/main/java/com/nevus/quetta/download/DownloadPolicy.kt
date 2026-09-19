@@ -7,7 +7,7 @@ import java.util.Locale
 object DownloadPolicy {
     private val controlOrReserved = Regex("[\\/:*?\"<>|\u0000-\u001F]")
     private val repeatedSpace = Regex("\\s+")
-    private val dangerousDotSegments = Regex("(^|[\\/])\.\.?([\\/]|$)")
+    private val dangerousDotSegments = Regex("""(^|[\\/])\.\.?([\\/]|$)""")
 
     fun validateHttps(raw: String): Uri? {
         val uri = runCatching { Uri.parse(raw.trim()) }.getOrNull() ?: return null
