@@ -4,7 +4,8 @@ set -Eeuo pipefail
 BUILD_ID="${1:?build id wajib diisi}"
 SOURCE_DIR="${2:?direktori kandidat wajib diisi}"
 ROOT_DIR="/srv/nevusquetta"
-CANDIDATE_DIR="$ROOT_DIR/candidates/$BUILD_ID"
+CANDIDATES_ROOT="${NEVUS_CANDIDATES_ROOT:-$ROOT_DIR/releases/.candidates}"
+CANDIDATE_DIR="$CANDIDATES_ROOT/$BUILD_ID"
 
 [[ -d "$SOURCE_DIR" ]] || { echo "Direktori sumber tidak ditemukan" >&2; exit 1; }
 [[ -f "$SOURCE_DIR/NevusQuetta.apk" ]] || { echo "NevusQuetta.apk tidak ditemukan" >&2; exit 1; }
@@ -20,4 +21,5 @@ rsync -a --delete "$SOURCE_DIR/" "$CANDIDATE_DIR/"
 )
 
 echo "CANDIDATE_DEPLOY=PASS"
+echo "BUILD_ID=$BUILD_ID"
 echo "PATH=$CANDIDATE_DIR"
