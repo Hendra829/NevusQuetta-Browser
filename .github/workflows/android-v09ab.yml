@@ -59,8 +59,7 @@ jobs:
             echo "Signing material must not be committed" >&2
             exit 1
           fi
-          if rg -n 'nevuslab122|storePassword\s*=\s*"|keyPassword\s*=\s*"' . \
-            --glob '!**/build/**'; then
+          if git grep -nE 'nevuslab122|storePassword[[:space:]]*=[[:space:]]*"|keyPassword[[:space:]]*=[[:space:]]*"' -- .; then
             echo "Hard-coded signing secret found" >&2
             exit 1
           fi
