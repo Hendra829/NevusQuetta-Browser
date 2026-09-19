@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -32,9 +33,25 @@ class PersistenceVerifyTest {
                 BrowserDatabase.get(context),
                 ioDispatcher = Dispatchers.IO,
             )
-            assertEquals(1, repository.bookmarks().first().size)
-            assertEquals(1, repository.history().first().size)
-            assertEquals(2, repository.tabs().first().size)
+
+            val bookmarks = repository.bookmarks().first()
+            val history = repository.history().first()
+            val tabs = repository.tabs().first()
+
+            assertTrue(
+                bookmarks.any { item ->
+                    item.normalizedUrl == "https://example.com/"
+                },
+            )
+            assertTrue(
+                history.any { item ->
+                    item.url == "https://example.org/" &&
+                        item.title == "Runtime History"
+                },
+            )
+            assertEquals(2, tabs.size)
+            assertTrue(tabs.any { item -> item.tabId == "runtime-a" })
+            assertTrue(tabs.any { item -> item.tabId == "runtime-b" })
         }
 
         val cleanupFailures = context
