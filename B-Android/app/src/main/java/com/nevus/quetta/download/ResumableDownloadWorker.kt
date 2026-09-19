@@ -244,6 +244,7 @@ class ResumableDownloadWorker(
             connection.connectTimeout = CONNECT_TIMEOUT_MS
             connection.readTimeout = READ_TIMEOUT_MS
             connection.useCaches = false
+            connection.setRequestProperty("Accept-Encoding", "identity")
             connection.requestMethod = "GET"
 
             secret.userAgent?.takeIf(String::isNotBlank)
