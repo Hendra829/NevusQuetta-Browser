@@ -3,8 +3,10 @@ package com.nevusquetta.browser.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nevusquetta.browser.model.BrowserUiState
+import java.net.IDN
 import java.net.URI
 import java.net.URISyntaxException
+import java.net.URL
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -95,18 +97,11 @@ class BrowserViewModel(
                 val normalizedUrl = withContext(urlNormalizationDispatcher) {
                     normalizeUrl(input)
                 }
-                commandChannel.send(BrowserCommand.LoadUrl(normalizedUrl))
-                emitUrl(normalizedUrl)
+                publishNavigation(normalizedUrl)
             }
         }
 
-        _uiState.update { current ->
-            current.copy(
-                isLoading = true,
-                progress = 0,
-            )
-        }
-        dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
+        startNavigation(BrowserUiState.DEFAULT_HOME_URL)
     }
 
     /**
@@ -220,15 +215,7 @@ class BrowserViewModel(
      * Memulai navigasi ke halaman home default dan langsung memberi feedback loading ke UI.
      */
     fun onHomeClicked() {
-        _uiState.update { current ->
-            current.copy(
-                isLoading = true,
-                lastErrorMessage = null,
-                progress = 0,
-            )
-        }
-        dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
-        emitUrl(BrowserUiState.DEFAULT_HOME_URL)
+        startNavigation(BrowserUiState.DEFAULT_HOME_URL)
     }
 
     /**
@@ -236,13 +223,7 @@ class BrowserViewModel(
      * boleh mengirim command navigasi ke WebView.
      */
     fun submitAddress(input: String) {
-        _uiState.update { current ->
-            current.copy(
-                isLoading = true,
-                lastErrorMessage = null,
-                progress = 0,
-            )
-        }
+        markNavigationStarted()
         addressSubmissions.tryEmit(input)
     }
 
@@ -271,6 +252,28 @@ class BrowserViewModel(
         }
     }
 
+    private fun markNavigationStarted() {
+        _uiState.update { current ->
+            current.copy(
+                isLoading = true,
+                lastErrorMessage = null,
+                progress = 0,
+            )
+        }
+    }
+
+    private fun startNavigation(url: String) {
+        markNavigationStarted()
+        viewModelScope.launch {
+            publishNavigation(url)
+        }
+    }
+
+    private suspend fun publishNavigation(url: String) {
+        commandChannel.send(BrowserCommand.LoadUrl(url))
+        emitUrl(url)
+    }
+
     private fun emitUrl(url: String?) {
         val value = url?.trim().orEmpty()
         if (value.isNotEmpty()) {
@@ -292,29 +295,48 @@ class BrowserViewModel(
         }
 
         return try {
-            val uri = URI(candidate)
+            val uri = URI(candidate).normalize()
             val normalizedScheme = uri.scheme?.lowercase()
-            if (hasScheme) {
-                if (
-                    normalizedScheme in SAFE_SCHEMES &&
-                    (
-                        normalizedScheme !in NETWORK_SCHEMES ||
-                            (
-                                !uri.host.isNullOrBlank() &&
-                                    uri.userInfo.isNullOrBlank()
-                                )
-                        )
-                ) {
-                    uri.toString()
-                } else {
-                    BrowserUiState.DEFAULT_HOME_URL
-                }
-            } else if (uri.host.isNullOrBlank() || !uri.userInfo.isNullOrBlank()) {
-                BrowserUiState.DEFAULT_HOME_URL
-            } else {
+
+            if (normalizedScheme == "about") {
                 uri.toString()
+            } else if (normalizedScheme in NETWORK_SCHEMES) {
+                canonicalizeNetworkUrl(candidate)
+            } else {
+                BrowserUiState.DEFAULT_HOME_URL
             }
         } catch (_: URISyntaxException) {
+            BrowserUiState.DEFAULT_HOME_URL
+        }
+    }
+
+    private fun canonicalizeNetworkUrl(candidate: String): String {
+        return try {
+            val url = URL(candidate)
+            val uri = url.toURI().normalize()
+            val host = uri.host?.takeIf(String::isNotBlank)?.let(IDN::toASCII)
+                ?: return BrowserUiState.DEFAULT_HOME_URL
+            if (!uri.userInfo.isNullOrBlank()) {
+                return BrowserUiState.DEFAULT_HOME_URL
+            }
+
+            val normalizedPort = when {
+                url.port == -1 -> -1
+                url.protocol.equals("http", ignoreCase = true) && url.port == 80 -> -1
+                url.protocol.equals("https", ignoreCase = true) && url.port == 443 -> -1
+                else -> url.port
+            }
+            val normalizedPath = uri.path.takeUnless(String::isNullOrBlank) ?: "/"
+            URI(
+                url.protocol.lowercase(),
+                null,
+                host,
+                normalizedPort,
+                normalizedPath,
+                uri.rawQuery,
+                uri.rawFragment,
+            ).toASCIIString()
+        } catch (_: Exception) {
             BrowserUiState.DEFAULT_HOME_URL
         }
     }
@@ -322,7 +344,6 @@ class BrowserViewModel(
     companion object {
         private val NETWORK_SCHEMES = setOf("http", "https")
         private val SCHEME_PATTERN = Regex("^[a-zA-Z][a-zA-Z\\d+\\-.]*:.*")
-        private val SAFE_SCHEMES = setOf("about", "http", "https")
     }
 }
 

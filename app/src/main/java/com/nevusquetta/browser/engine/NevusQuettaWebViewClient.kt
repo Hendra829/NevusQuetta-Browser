@@ -3,6 +3,7 @@ package com.nevusquetta.browser.engine
 import android.graphics.Bitmap
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.nevusquetta.browser.viewmodel.BrowserViewModel
@@ -49,6 +50,24 @@ class NevusQuettaWebViewClient(
         )
     }
 
+    override fun shouldOverrideUrlLoading(
+        view: WebView?,
+        request: WebResourceRequest?,
+    ): Boolean {
+        val url = request?.url ?: return false
+        if (url.scheme?.lowercase() in ALLOWED_SCHEMES) {
+            return false
+        }
+
+        viewModel.onPageFailed(
+            url = url.toString(),
+            canGoBack = view?.canGoBack() == true,
+            canGoForward = view?.canGoForward() == true,
+            description = "Blocked unsupported URL scheme.",
+        )
+        return true
+    }
+
     override fun onReceivedError(
         view: WebView?,
         request: WebResourceRequest?,
@@ -63,5 +82,33 @@ class NevusQuettaWebViewClient(
                 description = error?.description?.toString(),
             )
         }
+    }
+
+    override fun onReceivedHttpError(
+        view: WebView?,
+        request: WebResourceRequest?,
+        errorResponse: WebResourceResponse?,
+    ) {
+        super.onReceivedHttpError(view, request, errorResponse)
+        if (request?.isForMainFrame == true) {
+            val description = buildString {
+                append("HTTP ")
+                append(errorResponse?.statusCode ?: 0)
+                errorResponse?.reasonPhrase?.takeIf { it.isNotBlank() }?.let {
+                    append(": ")
+                    append(it)
+                }
+            }
+            viewModel.onPageFailed(
+                url = request.url?.toString(),
+                canGoBack = view?.canGoBack() == true,
+                canGoForward = view?.canGoForward() == true,
+                description = description,
+            )
+        }
+    }
+
+    companion object {
+        private val ALLOWED_SCHEMES = setOf("about", "http", "https")
     }
 }

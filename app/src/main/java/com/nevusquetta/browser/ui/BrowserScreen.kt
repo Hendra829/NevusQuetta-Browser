@@ -90,6 +90,7 @@ fun BrowserScreen(
             webChromeClient = webChromeClient
         }
     }
+    var isWebViewDisposed by remember(webView) { mutableStateOf(false) }
     var addressBarValue by rememberSaveable { mutableStateOf(uiState.currentUrl) }
 
     LaunchedEffect(uiState.currentUrl) {
@@ -100,6 +101,9 @@ fun BrowserScreen(
 
     LaunchedEffect(viewModel, webView) {
         viewModel.commands.collect { command ->
+            if (isWebViewDisposed) {
+                return@collect
+            }
             when (command) {
                 BrowserCommand.Back -> if (webView.canGoBack()) webView.goBack()
                 BrowserCommand.Forward -> if (webView.canGoForward()) webView.goForward()
@@ -111,7 +115,9 @@ fun BrowserScreen(
     }
 
     DisposableEffect(webView) {
+        isWebViewDisposed = false
         onDispose {
+            isWebViewDisposed = true
             webView.stopLoading()
             webView.webChromeClient = null
             webView.webViewClient = null
