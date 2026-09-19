@@ -35,10 +35,15 @@ class MediaBridgeHost(
                 isMainFrame: Boolean,
                 _ ->
             val expected = expectedTopLevel
-            if (!isMainFrame || expected == null || !SafeMediaBridge.sameOrigin(expected, sourceOrigin)) {
+            val payload = message.data
+            if (!isMainFrame ||
+                expected == null ||
+                payload == null ||
+                !SafeMediaBridge.sameOrigin(expected, sourceOrigin)
+            ) {
                 return@WebMessageListener
             }
-            when (val decision = SafeMediaBridge.validate(expected, message.data)) {
+            when (val decision = SafeMediaBridge.validate(expected, payload)) {
                 is BridgeDecision.Accepted -> onCandidate(decision.candidate)
                 is BridgeDecision.Rejected -> Unit
             }
