@@ -1,6 +1,8 @@
 package com.nevus.quetta.web
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.view.ViewGroup
 import android.webkit.WebView
 import androidx.webkit.ProfileStore
@@ -17,6 +19,7 @@ class WebViewSessionManager(
 ) {
     private val sessions = LinkedHashMap<String, WebView>()
     private val privateProfiles = mutableMapOf<String, String>()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun supportsPrivateProfiles(): Boolean =
         WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
@@ -52,10 +55,38 @@ class WebViewSessionManager(
         webView.onPause()
         webView.destroy()
 
-        val profileName = privateProfiles.remove(tabId)
-        if (profileName != null && supportsPrivateProfiles()) {
-            runCatching { ProfileStore.getInstance().deleteProfile(profileName) }
+        privateProfiles.remove(tabId)?.let { profileName ->
+            schedulePrivateProfileDeletion(profileName)
         }
+    }
+
+    private fun schedulePrivateProfileDeletion(
+        profileName: String,
+        attempt: Int = 0,
+    ) {
+        if (!supportsPrivateProfiles()) return
+
+        val delayMillis = DELETE_RETRY_DELAYS_MS[
+            attempt.coerceAtMost(DELETE_RETRY_DELAYS_MS.lastIndex)
+        ]
+
+        mainHandler.postDelayed({
+            val store = ProfileStore.getInstance()
+            val names = runCatching { store.getAllProfileNames() }.getOrElse { emptyList() }
+            if (profileName !in names) return@postDelayed
+
+            val result = runCatching {
+                store.deleteProfile(profileName)
+            }
+
+            if (result.isSuccess && result.getOrDefault(false)) {
+                return@postDelayed
+            }
+
+            if (attempt < DELETE_RETRY_DELAYS_MS.lastIndex) {
+                schedulePrivateProfileDeletion(profileName, attempt + 1)
+            }
+        }, delayMillis)
     }
 
     fun trimInactive(state: TabState, maxResident: Int = 4) {
@@ -86,5 +117,9 @@ class WebViewSessionManager(
 
     fun destroyAll() {
         sessions.keys.toList().forEach(::release)
+    }
+
+    private companion object {
+        val DELETE_RETRY_DELAYS_MS = longArrayOf(100L, 250L, 500L, 1000L, 2000L, 3000L)
     }
 }
