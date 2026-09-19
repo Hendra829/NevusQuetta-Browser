@@ -155,11 +155,23 @@ class BrowserViewModel(
     }
 
     fun onHomeClicked() {
+        _uiState.update { current ->
+            current.copy(
+                isLoading = true,
+                progress = 0,
+            )
+        }
         emitUrl(BrowserUiState.DEFAULT_HOME_URL)
         dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
     }
 
     fun submitAddress(input: String) {
+        _uiState.update { current ->
+            current.copy(
+                isLoading = true,
+                progress = 0,
+            )
+        }
         viewModelScope.launch(urlNormalizationDispatcher) {
             val normalizedUrl = normalizeUrl(input)
             emitUrl(normalizedUrl)

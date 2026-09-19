@@ -55,7 +55,7 @@ class NevusQuettaWebViewClient(
         error: WebResourceError?,
     ) {
         super.onReceivedError(view, request, error)
-        if (request?.isForMainFrame != false) {
+        if (request?.isForMainFrame == true) {
             viewModel.onPageFinished(
                 url = view?.url,
                 canGoBack = view?.canGoBack() == true,

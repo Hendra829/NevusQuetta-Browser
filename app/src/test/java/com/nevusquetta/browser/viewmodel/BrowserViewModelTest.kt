@@ -169,4 +169,25 @@ class BrowserViewModelTest {
         assertFalse(viewModel.uiState.value.isLoading)
         assertEquals(100, viewModel.uiState.value.progress)
     }
+
+    @Test
+    fun fullyQualifiedUrlIsPreservedBeforeLoading() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("http://example.com/path")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl("http://example.com/path"), command.await())
+        assertEquals("http://example.com/path", viewModel.uiState.value.currentUrl)
+    }
 }

@@ -34,6 +34,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -52,6 +56,10 @@ fun BrowserScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val loadingDescription = stringResource(
+        R.string.browser_loading_progress,
+        uiState.progress,
+    )
     val webView = remember(context) {
         WebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -120,7 +128,15 @@ fun BrowserScreen(
         if (uiState.isLoading) {
             LinearProgressIndicator(
                 progress = uiState.progress / 100f,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics {
+                        contentDescription = loadingDescription
+                        progressBarRangeInfo = ProgressBarRangeInfo(
+                            current = uiState.progress / 100f,
+                            range = 0f..1f,
+                        )
+                    },
             )
         }
 

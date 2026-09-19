@@ -8,4 +8,5 @@
     <string name="browser_home">Home</string>
     <string name="browser_address_label">Address</string>
     <string name="browser_address_placeholder">https://example.com</string>
+    <string name="browser_loading_progress">Loading page, %1$d percent</string>
 </resources>
