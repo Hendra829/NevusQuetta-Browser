@@ -122,6 +122,7 @@ class DownloadPreflightClient(
         connection.connectTimeout = connectTimeoutMs
         connection.readTimeout = readTimeoutMs
         connection.useCaches = false
+        connection.setRequestProperty("Accept-Encoding", "identity")
         return connection
     }
 
