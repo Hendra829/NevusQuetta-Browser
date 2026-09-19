@@ -234,6 +234,27 @@ class BrowserViewModelTest {
     }
 
     @Test
+    fun unsupportedNetworkSchemeFallsBackToHomeUrl() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("ftp://example.com")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL), command.await())
+        assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
     fun latestSubmittedAddressWinsWhenRequestsOverlap() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val viewModel = BrowserViewModel(
@@ -273,5 +294,29 @@ class BrowserViewModelTest {
 
         assertTrue(viewModel.uiState.value.isLoading)
         assertEquals(0, viewModel.uiState.value.progress)
+    }
+
+    @Test
+    fun homeActionResetsLoadingAndEmitsHomeUrl() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.onPageFinished("https://example.com", canGoBack = false, canGoForward = false)
+        runCurrent()
+        viewModel.onHomeClicked()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertTrue(viewModel.uiState.value.isLoading)
+        assertEquals(0, viewModel.uiState.value.progress)
+        assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
+        assertEquals(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL), command.await())
     }
 }

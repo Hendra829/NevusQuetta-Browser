@@ -61,6 +61,8 @@ fun BrowserScreen(
         R.string.browser_loading_progress,
         uiState.progress,
     )
+    val webViewClient = remember(viewModel) { NevusQuettaWebViewClient(viewModel) }
+    val webChromeClient = remember(viewModel) { NevusQuettaWebChromeClient(viewModel) }
     val webView = remember(context, viewModel) {
         WebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -72,10 +74,11 @@ fun BrowserScreen(
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.loadsImagesAutomatically = true
             isVerticalScrollBarEnabled = true
+            webViewClient = webViewClient
+            webChromeClient = webChromeClient
+            loadUrl(uiState.currentUrl)
         }
     }
-    val webViewClient = remember(viewModel) { NevusQuettaWebViewClient(viewModel) }
-    val webChromeClient = remember(viewModel) { NevusQuettaWebChromeClient(viewModel) }
     var addressBarValue by rememberSaveable { mutableStateOf(uiState.currentUrl) }
 
     LaunchedEffect(uiState.currentUrl) {
@@ -96,22 +99,13 @@ fun BrowserScreen(
         }
     }
 
-    DisposableEffect(webView, webViewClient, webChromeClient) {
-        webView.webViewClient = webViewClient
-        webView.webChromeClient = webChromeClient
-
+    DisposableEffect(webView) {
         onDispose {
             webView.stopLoading()
             webView.webChromeClient = null
             webView.webViewClient = null
             (webView.parent as? ViewGroup)?.removeView(webView)
             webView.destroy()
-        }
-    }
-
-    LaunchedEffect(webView, uiState.currentUrl) {
-        if (webView.url == null && uiState.currentUrl.isNotBlank()) {
-            webView.loadUrl(uiState.currentUrl)
         }
     }
 
@@ -141,6 +135,16 @@ fun BrowserScreen(
                             range = 0f..1f,
                         )
                     },
+            )
+        }
+
+        uiState.lastErrorMessage?.let { errorMessage ->
+            Text(
+                text = errorMessage,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
             )
         }
 

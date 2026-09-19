@@ -35,6 +35,7 @@ class BrowserViewModel(
     private val progressDebounceMillis: Long = 50L,
     private val urlDebounceMillis: Long = 150L,
 ) : ViewModel() {
+    private var latestSubmissionToken: Long = 0
     private var submitAddressJob: Job? = null
 
     private val progressEvents = MutableSharedFlow<Int>(
@@ -91,16 +92,23 @@ class BrowserViewModel(
         }
     }
 
+    /**
+     * Menandai awal navigasi baru dan membersihkan error lama sebelum progress WebView berjalan.
+     */
     fun onPageStarted(url: String?) {
         emitUrl(url)
         _uiState.update { current ->
             current.copy(
                 isLoading = true,
+                lastErrorMessage = null,
                 progress = 0,
             )
         }
     }
 
+    /**
+     * Menyelesaikan state loading dan menyegarkan cache tombol back/forward saat halaman selesai.
+     */
     fun onPageFinished(
         url: String?,
         canGoBack: Boolean,
@@ -111,11 +119,15 @@ class BrowserViewModel(
         _uiState.update { current ->
             current.copy(
                 isLoading = false,
+                lastErrorMessage = null,
                 progress = 100,
             )
         }
     }
 
+    /**
+     * Menyegarkan cache histori ketika WebView mengubah visited history.
+     */
     fun onVisitedHistoryUpdated(
         url: String?,
         canGoBack: Boolean,
@@ -125,10 +137,37 @@ class BrowserViewModel(
         updateNavigationState(canGoBack = canGoBack, canGoForward = canGoForward)
     }
 
+    /**
+     * Menerima progress mentah WebView yang nanti akan didebounce sebelum masuk ke UI state.
+     */
     fun onProgressChanged(progress: Int) {
         progressEvents.tryEmit(progress)
     }
 
+    /**
+     * Dipanggil saat navigasi frame utama gagal agar UI bisa menampilkan alasan kegagalan.
+     */
+    fun onPageFailed(
+        url: String?,
+        canGoBack: Boolean,
+        canGoForward: Boolean,
+        description: String?,
+    ) {
+        emitUrl(url)
+        updateNavigationState(canGoBack = canGoBack, canGoForward = canGoForward)
+        _uiState.update { current ->
+            current.copy(
+                isLoading = false,
+                lastErrorMessage = description?.takeIf(String::isNotBlank),
+            )
+        }
+    }
+
+    /**
+     * Meminta navigasi mundur dari sumber state yang sama dengan tombol back device.
+     *
+     * @return `true` bila WebView history tersedia dan command back dikirim.
+     */
     fun requestBackNavigation(): Boolean {
         if (!_uiState.value.canGoBack) {
             return false
@@ -138,6 +177,9 @@ class BrowserViewModel(
         return true
     }
 
+    /**
+     * Mengirim command maju hanya bila cache histori menyatakan aksi ini valid.
+     */
     fun onForwardClicked() {
         if (_uiState.value.canGoForward) {
             dispatchCommand(BrowserCommand.Forward)
@@ -156,10 +198,14 @@ class BrowserViewModel(
         dispatchCommand(command)
     }
 
+    /**
+     * Memulai navigasi ke halaman home default dan langsung memberi feedback loading ke UI.
+     */
     fun onHomeClicked() {
         _uiState.update { current ->
             current.copy(
                 isLoading = true,
+                lastErrorMessage = null,
                 progress = 0,
             )
         }
@@ -167,16 +213,25 @@ class BrowserViewModel(
         dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
     }
 
+    /**
+     * Menormalisasi input omnibox secara asynchronous lalu hanya mengizinkan submit terbaru yang
+     * boleh mengirim command navigasi ke WebView.
+     */
     fun submitAddress(input: String) {
         _uiState.update { current ->
             current.copy(
                 isLoading = true,
+                lastErrorMessage = null,
                 progress = 0,
             )
         }
         submitAddressJob?.cancel()
+        val submissionToken = ++latestSubmissionToken
         submitAddressJob = viewModelScope.launch(urlNormalizationDispatcher) {
             val normalizedUrl = normalizeUrl(input)
+            if (submissionToken != latestSubmissionToken) {
+                return@launch
+            }
             emitUrl(normalizedUrl)
             _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
         }
@@ -230,8 +285,12 @@ class BrowserViewModel(
         return try {
             val uri = URI(candidate)
             val normalizedScheme = uri.scheme?.lowercase()
-            if (hasScheme && normalizedScheme in SAFE_SCHEMES) {
-                uri.toString()
+            if (hasScheme) {
+                if (normalizedScheme in SAFE_SCHEMES) {
+                    uri.toString()
+                } else {
+                    BrowserUiState.DEFAULT_HOME_URL
+                }
             } else if (uri.host.isNullOrBlank()) {
                 BrowserUiState.DEFAULT_HOME_URL
             } else {

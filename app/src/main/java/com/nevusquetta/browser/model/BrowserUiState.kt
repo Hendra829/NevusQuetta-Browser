@@ -8,6 +8,7 @@ data class BrowserUiState(
     val canGoForward: Boolean = false,
     val isLoading: Boolean = false,
     val currentUrl: String = DEFAULT_HOME_URL,
+    val lastErrorMessage: String? = null,
     val progress: Int = 0,
 ) {
     companion object {
