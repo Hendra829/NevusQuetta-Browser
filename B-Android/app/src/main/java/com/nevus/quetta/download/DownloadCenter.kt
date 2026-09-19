@@ -73,6 +73,7 @@ class DownloadCenter(
 
     fun canPause(item: DownloadEntity): Boolean =
         item.kind == DownloadKinds.DIRECT &&
+            item.supportsResume &&
             item.status in setOf(
                 DownloadStatuses.QUEUED,
                 DownloadStatuses.RUNNING,
@@ -80,6 +81,7 @@ class DownloadCenter(
 
     fun canResume(item: DownloadEntity): Boolean =
         item.kind == DownloadKinds.DIRECT &&
+            item.supportsResume &&
             item.status == DownloadStatuses.PAUSED
 
     fun canRetry(item: DownloadEntity): Boolean =
