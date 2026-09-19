@@ -6,6 +6,7 @@ DEPLOY_USER="${NEVUS_DEPLOY_USER:-nevusdeploy}"
 ROOT_DIR="/srv/nevusquetta"
 SITE_DIR="$ROOT_DIR/site"
 RELEASES_DIR="$ROOT_DIR/releases"
+CANDIDATES_DIR="$RELEASES_DIR/.candidates"
 TOOLS_DIR="$ROOT_DIR/tools"
 CURRENT_LINK="$ROOT_DIR/current"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +29,7 @@ if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$DEPLOY_USER"
 fi
 
-install -d -m 0755 "$ROOT_DIR" "$SITE_DIR" "$RELEASES_DIR" "$TOOLS_DIR"
+install -d -m 0755 "$ROOT_DIR" "$SITE_DIR" "$RELEASES_DIR" "$CANDIDATES_DIR" "$TOOLS_DIR"
 install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh"
 touch "/home/$DEPLOY_USER/.ssh/authorized_keys"
 chown "$DEPLOY_USER:$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh/authorized_keys"
