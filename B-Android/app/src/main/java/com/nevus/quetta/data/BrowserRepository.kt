@@ -41,7 +41,10 @@ class BrowserRepository(
                 url = normalized,
                 title = title.orEmpty().ifBlank { existing.title },
                 createdAt = createdAt,
-            ).also(dao::updateBookmark)
+            ).let { updated ->
+                dao.updateBookmark(updated)
+                updated
+            }
         }
         entity
     }
