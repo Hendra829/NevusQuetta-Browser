@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -408,5 +409,61 @@ class BrowserViewModelTest {
         )
 
         assertEquals("  Network error  ", viewModel.uiState.value.lastErrorMessage)
+    }
+
+    @Test
+    fun reloadStopEmitsStopWhenLoadingAndReloadWhenIdle() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val stopCommand = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+        viewModel.onPageStarted("https://example.com")
+        viewModel.onReloadStopClicked()
+        runCurrent()
+        assertEquals(BrowserCommand.StopLoading, stopCommand.await())
+
+        val reloadCommand = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+        viewModel.onPageFinished("https://example.com", canGoBack = false, canGoForward = false)
+        viewModel.onReloadStopClicked()
+        runCurrent()
+        assertEquals(BrowserCommand.Reload, reloadCommand.await())
+    }
+
+    @Test
+    fun backAndForwardCommandsOnlyEmitWhenHistoryAllows() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        assertEquals(false, viewModel.requestBackNavigation())
+        runCurrent()
+        assertEquals(
+            null,
+            withTimeoutOrNull(10L) { viewModel.commands.first() },
+        )
+
+        viewModel.onVisitedHistoryUpdated("https://example.com", canGoBack = true, canGoForward = true)
+        runCurrent()
+
+        val backCommand = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+        assertEquals(true, viewModel.requestBackNavigation())
+        runCurrent()
+        assertEquals(BrowserCommand.Back, backCommand.await())
+
+        val forwardCommand = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+        viewModel.onForwardClicked()
+        runCurrent()
+        assertEquals(BrowserCommand.Forward, forwardCommand.await())
     }
 }

@@ -38,7 +38,6 @@ class BrowserViewModel(
     private val progressDebounceMillis: Long = 50L,
     private val urlDebounceMillis: Long = 150L,
 ) : ViewModel() {
-    private var hasStartedInitialNavigation = false
     private val addressSubmissions = MutableSharedFlow<String>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -108,11 +107,7 @@ class BrowserViewModel(
      * Memulai load awal setelah collector command aktif agar navigasi pertama tidak hilang.
      */
     fun onCommandConsumerReady() {
-        if (hasStartedInitialNavigation) {
-            return
-        }
-        hasStartedInitialNavigation = true
-        startNavigation(BrowserUiState.DEFAULT_HOME_URL)
+        startNavigation(_uiState.value.currentUrl)
     }
 
     /**

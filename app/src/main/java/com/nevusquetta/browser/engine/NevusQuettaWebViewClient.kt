@@ -83,7 +83,7 @@ class NevusQuettaWebViewClient(
         error: WebResourceError?,
     ) {
         super.onReceivedError(view, request, error)
-        if (request?.isForMainFrame == true) {
+        if (request?.isForMainFrame == true && request.url?.toString() == view?.url) {
             viewModel.onPageFailed(
                 url = request.url?.toString(),
                 canGoBack = view?.canGoBack() == true,
@@ -99,7 +99,7 @@ class NevusQuettaWebViewClient(
         errorResponse: WebResourceResponse?,
     ) {
         super.onReceivedHttpError(view, request, errorResponse)
-        if (request?.isForMainFrame == true) {
+        if (request?.isForMainFrame == true && request.url?.toString() == view?.url) {
             val description = buildString {
                 append("HTTP ")
                 append(errorResponse?.statusCode ?: 0)

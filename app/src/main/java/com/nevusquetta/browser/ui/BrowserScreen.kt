@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -52,6 +53,7 @@ import com.nevusquetta.browser.engine.NevusQuettaWebViewClient
 import com.nevusquetta.browser.viewmodel.BrowserCommand
 import com.nevusquetta.browser.viewmodel.BrowserViewModel
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 @Composable
 fun BrowserScreen(
@@ -90,6 +92,7 @@ fun BrowserScreen(
             webChromeClient = webChromeClient
         }
     }
+    val scope = rememberCoroutineScope()
     var isWebViewDisposed by remember(webView) { mutableStateOf(false) }
     var addressBarValue by rememberSaveable { mutableStateOf(uiState.currentUrl) }
 
@@ -99,28 +102,25 @@ fun BrowserScreen(
         }
     }
 
-    LaunchedEffect(viewModel, webView) {
-        viewModel.commands.collect { command ->
-            if (isWebViewDisposed) {
-                return@collect
-            }
-            when (command) {
-                BrowserCommand.Back -> if (webView.canGoBack()) webView.goBack()
-                BrowserCommand.Forward -> if (webView.canGoForward()) webView.goForward()
-                is BrowserCommand.LoadUrl -> webView.loadUrl(command.url)
-                BrowserCommand.Reload -> webView.reload()
-                BrowserCommand.StopLoading -> webView.stopLoading()
-            }
-        }
-    }
-
-    LaunchedEffect(viewModel) {
-        viewModel.onCommandConsumerReady()
-    }
-
     DisposableEffect(webView) {
         isWebViewDisposed = false
+        val commandJob = scope.launch {
+            viewModel.commands.collect { command ->
+                if (isWebViewDisposed) {
+                    return@collect
+                }
+                when (command) {
+                    BrowserCommand.Back -> if (webView.canGoBack()) webView.goBack()
+                    BrowserCommand.Forward -> if (webView.canGoForward()) webView.goForward()
+                    is BrowserCommand.LoadUrl -> webView.loadUrl(command.url)
+                    BrowserCommand.Reload -> webView.reload()
+                    BrowserCommand.StopLoading -> webView.stopLoading()
+                }
+            }
+        }
+        viewModel.onCommandConsumerReady()
         onDispose {
+            commandJob.cancel()
             isWebViewDisposed = true
             webView.stopLoading()
             webView.webChromeClient = null
