@@ -33,9 +33,7 @@ import com.nevus.quetta.data.DownloadEntity
 import com.nevus.quetta.data.DownloadKinds
 import com.nevus.quetta.data.DownloadStatuses
 import com.nevus.quetta.databinding.ActivityMainBinding
-import com.nevus.quetta.download.DownloadRepository
-import com.nevus.quetta.download.HlsDownloadCoordinator
-import com.nevus.quetta.download.ManagedDownloadCoordinator
+import com.nevus.quetta.download.DownloadCenter
 import com.nevus.quetta.download.ManagedDownloadResult
 import com.nevus.quetta.performance.RuntimePerformanceMetrics
 import com.nevus.quetta.navigation.NavigationController
@@ -53,18 +51,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var coordinator: BrowserCoordinator
     private lateinit var sessions: WebViewSessionManager
-    private lateinit var downloads: ManagedDownloadCoordinator
-    private lateinit var hlsDownloads: HlsDownloadCoordinator
+    private lateinit var downloadCenter: DownloadCenter
     private lateinit var metrics: RuntimePerformanceMetrics
 
     private val bridgeHosts = mutableMapOf<String, MediaBridgeHost>()
@@ -85,15 +80,13 @@ class MainActivity : AppCompatActivity() {
 
         val database = BrowserDatabase.get(this)
         val repository = BrowserRepository(database)
-        val downloadRepository = DownloadRepository(database)
         coordinator = BrowserCoordinator(
             tabs = TabManager(startPage),
             repository = repository,
             homeUrl = startPage,
         )
         sessions = WebViewSessionManager(this)
-        downloads = ManagedDownloadCoordinator(this, downloadRepository)
-        hlsDownloads = HlsDownloadCoordinator(this, downloadRepository)
+        downloadCenter = DownloadCenter(this, database)
         metrics = RuntimePerformanceMetrics(this)
 
         configureActions()
@@ -104,12 +97,6 @@ class MainActivity : AppCompatActivity() {
                 ?: prefs.getString("lastUrl", startPage)
             coordinator.restoreSession(fallback)
             coordinator.tabs.state.collectLatest(::renderState)
-        }
-        scope.launch {
-            while (isActive) {
-                runCatching { downloads.refreshAll() }
-                delay(DOWNLOAD_REFRESH_MS)
-            }
         }
     }
 
@@ -317,7 +304,7 @@ class MainActivity : AppCompatActivity() {
                 _ ->
             scope.launch {
                 handleDownloadResult(
-                    enqueueMedia(
+                    downloadCenter.enqueue(
                         url = url,
                         userAgent = userAgent,
                         contentDisposition = contentDisposition,
@@ -525,55 +512,19 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(R.string.download_action) { _, _ ->
                 scope.launch {
                     handleDownloadResult(
-                        enqueueMedia(
+                        downloadCenter.enqueue(
                             url = candidate.url.toString(),
                             userAgent = webView.settings.userAgentString,
                             contentDisposition = null,
                             mimeType = null,
                             sourcePage = webView.url,
+                            hint = candidate.hint,
                         ),
                     )
                 }
             }
             .setNegativeButton(R.string.cancel_action, null)
             .show()
-    }
-
-    private suspend fun enqueueMedia(
-        url: String,
-        userAgent: String?,
-        contentDisposition: String?,
-        mimeType: String?,
-        sourcePage: String?,
-    ): ManagedDownloadResult {
-        return if (isHls(url, mimeType)) {
-            hlsDownloads.enqueue(
-                manifestUrl = url,
-                userAgent = userAgent,
-                sourcePage = sourcePage,
-            )
-        } else {
-            downloads.enqueue(
-                url = url,
-                userAgent = userAgent,
-                contentDisposition = contentDisposition,
-                mimeType = mimeType,
-                sourcePage = sourcePage,
-            )
-        }
-    }
-
-    private fun isHls(url: String, mimeType: String?): Boolean {
-        val normalizedMime = mimeType?.substringBefore(';')?.trim()?.lowercase()
-        if (normalizedMime == "application/vnd.apple.mpegurl" ||
-            normalizedMime == "application/x-mpegurl" ||
-            normalizedMime == "audio/mpegurl"
-        ) {
-            return true
-        }
-        return runCatching { Uri.parse(url).lastPathSegment.orEmpty().lowercase() }
-            .getOrDefault("")
-            .endsWith(".m3u8")
     }
 
     private fun handleDownloadResult(result: ManagedDownloadResult) {
@@ -587,8 +538,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDownloads() {
         scope.launch {
-            runCatching { downloads.refreshAll() }
-            val items = downloads.observe().first()
+            val items = downloadCenter.observe().first()
             if (items.isEmpty()) {
                 Toast.makeText(this@MainActivity, "Belum ada unduhan", Toast.LENGTH_SHORT).show()
                 return@launch
@@ -613,53 +563,57 @@ class MainActivity : AppCompatActivity() {
             ""
         }
         val kind = if (item.kind == DownloadKinds.HLS_VOD) "HLS" else "FILE"
-        return "[" + kind + "] " + item.fileName + "
-" + item.status + progress
+        return "[" + kind + "] " + item.fileName + "\n" + item.status + progress
     }
 
     private fun showDownloadActions(item: DownloadEntity) {
         val actions = mutableListOf<String>()
+        if (downloadCenter.canPause(item)) actions += getString(R.string.download_pause)
+        if (downloadCenter.canResume(item)) actions += getString(R.string.download_resume)
         if (item.status == DownloadStatuses.QUEUED ||
             item.status == DownloadStatuses.RUNNING ||
             item.status == DownloadStatuses.PAUSED
         ) {
-            actions += "Batalkan"
+            actions += getString(R.string.download_cancel)
         }
-        if (item.status == DownloadStatuses.FAILED ||
-            item.status == DownloadStatuses.CANCELED ||
-            item.status == DownloadStatuses.MISSING
-        ) {
-            actions += "Coba lagi"
+        if (downloadCenter.canRetry(item)) actions += getString(R.string.download_retry)
+        if (item.status !in setOf(DownloadStatuses.QUEUED, DownloadStatuses.RUNNING)) {
+            actions += getString(R.string.download_remove_entry)
         }
-        actions += "Tutup"
+        actions += getString(R.string.close_action)
 
         AlertDialog.Builder(this)
             .setTitle(item.fileName)
             .setMessage(downloadLabel(item))
             .setItems(actions.toTypedArray()) { dialog, which ->
                 when (actions[which]) {
-                    "Batalkan" -> scope.launch {
-                        val ok = if (item.kind == DownloadKinds.HLS_VOD) {
-                            hlsDownloads.cancel(item.downloadId)
-                        } else {
-                            downloads.cancel(item.downloadId)
-                        }
+                    getString(R.string.download_pause) -> scope.launch {
+                        val ok = downloadCenter.pause(item)
                         Toast.makeText(
                             this@MainActivity,
-                            if (ok) "Unduhan dibatalkan" else "Tidak dapat membatalkan",
+                            if (ok) R.string.download_paused else R.string.download_action_failed,
                             Toast.LENGTH_SHORT,
                         ).show()
                     }
-                    "Coba lagi" -> scope.launch {
-                        val result = if (item.kind == DownloadKinds.HLS_VOD) {
-                            hlsDownloads.retry(item.downloadId)
-                        } else {
-                            downloads.retry(
-                                item.downloadId,
-                                currentWebView?.settings?.userAgentString,
-                            )
-                        }
-                        handleDownloadResult(result)
+                    getString(R.string.download_resume),
+                    getString(R.string.download_retry) -> scope.launch {
+                        handleDownloadResult(downloadCenter.retry(item))
+                    }
+                    getString(R.string.download_cancel) -> scope.launch {
+                        val ok = downloadCenter.cancel(item)
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (ok) R.string.download_canceled else R.string.download_action_failed,
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    getString(R.string.download_remove_entry) -> scope.launch {
+                        val ok = downloadCenter.deleteMetadata(item)
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (ok) R.string.download_entry_removed else R.string.download_action_failed,
+                            Toast.LENGTH_SHORT,
+                        ).show()
                     }
                     else -> dialog.dismiss()
                 }
@@ -723,7 +677,4 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private companion object {
-        const val DOWNLOAD_REFRESH_MS = 1500L
-    }
 }
