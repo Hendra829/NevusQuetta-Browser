@@ -9,10 +9,13 @@
     native <methods>;
 }
 
-# WorkManager can instantiate workers by class name across process recreation.
+# WorkManager reconstructs workers by class name after process recreation.
+-keep class com.nevus.quetta.download.ResumableDownloadWorker {
+    public <init>(android.content.Context, androidx.work.WorkerParameters);
+}
 -keep class com.nevus.quetta.download.HlsVodDownloadWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
 
-# Room database implementations and schema metadata.
+# Room database implementation metadata must survive shrinking.
 -keep class * extends androidx.room.RoomDatabase { *; }
