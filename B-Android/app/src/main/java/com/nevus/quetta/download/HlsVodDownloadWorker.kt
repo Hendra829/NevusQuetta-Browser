@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.MediaStore
+import android.webkit.CookieManager
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
@@ -68,15 +69,20 @@ class HlsVodDownloadWorker(
                 }
 
                 var downloaded = 0L
+                var firstContentType: String? = null
                 FileOutputStream(tempFile).use { output ->
                     parts.forEachIndexed { index, partUrl ->
                         if (isStopped) throw CancellationException("HLS worker stopped")
-                        downloaded += appendHttps(
+                        val copied = appendHttps(
                             url = partUrl,
                             secret = secret,
                             output = output,
                             alreadyDownloaded = downloaded,
                         )
+                        downloaded += copied.bytes
+                        if (firstContentType == null && copied.contentType != null) {
+                            firstContentType = copied.contentType
+                        }
                         repository.updateProgress(
                             downloadId = downloadId,
                             status = DownloadStatuses.RUNNING,
@@ -97,11 +103,10 @@ class HlsVodDownloadWorker(
                     output.fd.sync()
                 }
 
-                val extension = if (media.initSegment != null) "mp4" else "ts"
-                val fileName = withExtension(item.fileName, extension)
-                val mime = if (extension == "mp4") "video/mp4" else "video/mp2t"
+                val format = outputFormat(media, firstContentType)
+                val fileName = withExtension(item.fileName, format.extension)
                 val digest = sha256(tempFile)
-                val localUri = publishVerified(tempFile, fileName, mime)
+                val localUri = publishVerified(tempFile, fileName, format.mimeType)
 
                 repository.updateDigest(downloadId, digest)
                 repository.updateProgress(
@@ -194,7 +199,7 @@ class HlsVodDownloadWorker(
         secret: DownloadSecret,
         output: FileOutputStream,
         alreadyDownloaded: Long,
-    ): Long {
+    ): SegmentCopy {
         val response = openValidated(url, secret)
         val connection = response.connection
         try {
@@ -218,7 +223,13 @@ class HlsVodDownloadWorker(
                 }
             }
             if (expected > 0 && copied != expected) error("HLS_SEGMENT_LENGTH_MISMATCH")
-            return copied
+            return SegmentCopy(
+                bytes = copied,
+                contentType = connection.contentType
+                    ?.substringBefore(';')
+                    ?.trim()
+                    ?.lowercase(),
+            )
         } finally {
             connection.disconnect()
         }
@@ -246,11 +257,17 @@ class HlsVodDownloadWorker(
                 ?.let { connection.setRequestProperty("User-Agent", it) }
             DownloadPolicy.safeReferrer(secret.sourcePage, current)
                 ?.let { connection.setRequestProperty("Referer", it) }
-            if (secret.cookie != null && DownloadPolicy.sameOrigin(manifestOrigin, current)) {
-                connection.setRequestProperty("Cookie", secret.cookie)
+            val sameOrigin = DownloadPolicy.sameOrigin(manifestOrigin, current)
+            if (sameOrigin) {
+                val cookie = runCatching {
+                    CookieManager.getInstance().getCookie(current.toString())
+                }.getOrNull() ?: secret.cookie
+                cookie?.takeIf(String::isNotBlank)
+                    ?.let { connection.setRequestProperty("Cookie", it) }
             }
 
             val code = connection.responseCode
+            if (sameOrigin) captureSetCookies(current, connection)
             if (code in REDIRECT_CODES) {
                 if (redirect >= MAX_REDIRECTS) {
                     connection.disconnect()
@@ -265,6 +282,44 @@ class HlsVodDownloadWorker(
             return Response(current, connection)
         }
         error("HLS_REDIRECT_RESOLUTION_FAILED")
+    }
+
+    private fun captureSetCookies(
+        uri: Uri,
+        connection: HttpsURLConnection,
+    ) {
+        val values = connection.headerFields
+            .filterKeys { key -> key?.equals("Set-Cookie", ignoreCase = true) == true }
+            .values
+            .flatten()
+        if (values.isEmpty()) return
+        runCatching {
+            val manager = CookieManager.getInstance()
+            values.filter(String::isNotBlank).forEach { value ->
+                manager.setCookie(uri.toString(), value)
+            }
+            manager.flush()
+        }
+    }
+
+    private fun outputFormat(
+        media: HlsParseResult.Media,
+        contentType: String?,
+    ): OutputFormat {
+        if (media.initSegment != null) {
+            return when (contentType) {
+                "audio/mp4", "audio/x-m4a" -> OutputFormat("m4a", "audio/mp4")
+                else -> OutputFormat("mp4", "video/mp4")
+            }
+        }
+        return when (contentType) {
+            "audio/aac", "audio/aacp" -> OutputFormat("aac", "audio/aac")
+            "audio/mpeg" -> OutputFormat("mp3", "audio/mpeg")
+            "audio/mp4", "audio/x-m4a" -> OutputFormat("m4a", "audio/mp4")
+            "video/mp4" -> OutputFormat("mp4", "video/mp4")
+            "video/mp2t", "application/mp2t" -> OutputFormat("ts", "video/mp2t")
+            else -> OutputFormat("ts", "video/mp2t")
+        }
     }
 
     private fun ensureStorage(nextBytes: Long) {
@@ -338,6 +393,9 @@ class HlsVodDownloadWorker(
         val withoutKnown = clean.removeSuffix(".m3u8")
             .removeSuffix(".mp4")
             .removeSuffix(".ts")
+            .removeSuffix(".aac")
+            .removeSuffix(".m4a")
+            .removeSuffix(".mp3")
         return DownloadPolicy.sanitizeFileName("$withoutKnown.$extension")
     }
 
@@ -371,6 +429,16 @@ class HlsVodDownloadWorker(
                 match.groupValues[1] + "=[redacted]"
             }
             .take(160)
+
+    private data class SegmentCopy(
+        val bytes: Long,
+        val contentType: String?,
+    )
+
+    private data class OutputFormat(
+        val extension: String,
+        val mimeType: String,
+    )
 
     private data class Response(
         val finalUri: Uri,
