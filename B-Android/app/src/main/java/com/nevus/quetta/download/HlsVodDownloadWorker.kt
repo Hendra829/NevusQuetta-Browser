@@ -258,16 +258,15 @@ class HlsVodDownloadWorker(
             DownloadPolicy.safeReferrer(secret.sourcePage, current)
                 ?.let { connection.setRequestProperty("Referer", it) }
             val sameOrigin = DownloadPolicy.sameOrigin(manifestOrigin, current)
-            if (sameOrigin) {
-                val cookie = runCatching {
-                    CookieManager.getInstance().getCookie(current.toString())
-                }.getOrNull() ?: secret.cookie
-                cookie?.takeIf(String::isNotBlank)
-                    ?.let { connection.setRequestProperty("Cookie", it) }
-            }
+            val jarCookie = runCatching {
+                CookieManager.getInstance().getCookie(current.toString())
+            }.getOrNull()
+            val cookie = jarCookie ?: secret.cookie.takeIf { sameOrigin }
+            cookie?.takeIf(String::isNotBlank)
+                ?.let { connection.setRequestProperty("Cookie", it) }
 
             val code = connection.responseCode
-            if (sameOrigin) captureSetCookies(current, connection)
+            captureSetCookies(current, connection)
             if (code in REDIRECT_CODES) {
                 if (redirect >= MAX_REDIRECTS) {
                     connection.disconnect()
