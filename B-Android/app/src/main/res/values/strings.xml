@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NevusQuetta</string>
+    <string name="action_back">Kembali</string>
+    <string name="action_forward">Maju</string>
+    <string name="action_home">Beranda</string>
+    <string name="action_reload">Muat ulang</string>
+    <string name="action_bookmark">Tambah bookmark</string>
+    <string name="action_tabs">Daftar tab</string>
+    <string name="action_menu">Menu</string>
+    <string name="address_hint">Cari atau masukkan alamat</string>
+    <string name="private_indicator">PRIVAT</string>
+    <string name="page_error">Halaman gagal dimuat. Periksa koneksi atau muat ulang.</string>
+    <string name="tabs_title">Tab</string>
+    <string name="bookmarks_title">Bookmark</string>
+    <string name="history_title">Riwayat</string>
+    <string name="new_tab">Tab baru</string>
+    <string name="new_private_tab">Tab privat baru</string>
+    <string name="close_active_tab">Tutup tab aktif</string>
+    <string name="no_bookmarks">Belum ada bookmark</string>
+    <string name="no_history">Belum ada riwayat</string>
+    <string name="private_unsupported">Mode privat memerlukan WebView dengan dukungan MULTI_PROFILE.</string>
+    <string name="session_cleared">Data sesi telah dibersihkan tanpa menghapus bookmark, unduhan, atau vault.</string>
+    <string name="download_media_title">Media terdeteksi</string>
+    <string name="download_action">Unduh</string>
+    <string name="cancel_action">Batal</string>
+    <string name="close_action">Tutup</string>
+    <string name="downloads_title">Antrean unduhan</string>
+    <string name="no_downloads">Belum ada unduhan</string>
+    <string name="download_pause">Jeda</string>
+    <string name="download_resume">Lanjutkan</string>
+    <string name="download_cancel">Batalkan</string>
+    <string name="download_retry">Coba lagi</string>
+    <string name="download_remove_entry">Hapus dari daftar</string>
+    <string name="download_paused">Unduhan dijeda</string>
+    <string name="download_canceled">Unduhan dibatalkan</string>
+    <string name="download_entry_removed">Entri unduhan dibersihkan</string>
+    <string name="download_action_failed">Aksi unduhan tidak dapat dijalankan</string>
+    <string name="performance_title">Metrik performa</string>
+    <string name="clear_history_action">Hapus riwayat</string>
+    <string name="history_cleared">Riwayat dihapus</string>
+    <string name="vault_action">Brankas</string>
+    <string name="vault_lock_action">Kunci brankas</string>
+    <string name="downloads_action">Unduhan</string>
+</resources>

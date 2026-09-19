@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "signed": false,
+  "note": "Daftar lab unsigned. G1 jalur A wajib ruleset bertanda tangan + URLLoaderThrottle.",
+  "hosts": [
+    "doubleclick.net",
+    "googlesyndication.com",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "facebook.net",
+    "scorecardresearch.com",
+    "app-measurement.com",
+    "adservice.google.com"
+  ]
+}

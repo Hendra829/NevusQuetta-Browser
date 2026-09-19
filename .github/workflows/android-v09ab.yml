@@ -1,0 +1,95 @@
+name: Android V0.9AB Gate
+
+on:
+  push:
+    branches: ["feat/v09ab"]
+    paths:
+      - "B-Android/**"
+      - ".github/workflows/android-v09ab.yml"
+  pull_request:
+    branches: ["feat/v09ab"]
+    paths:
+      - "B-Android/**"
+      - ".github/workflows/android-v09ab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-v09ab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: B-Android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android packages
+        run: |
+          sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager_bin"
+          yes | "$sdkmanager_bin" --licenses >/dev/null
+          "$sdkmanager_bin" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1"
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Verify no committed signing secret
+        run: |
+          if git ls-files | grep -E '(\.jks$|\.keystore$|^keystore/)'; then
+            echo "Signing material must not be committed" >&2
+            exit 1
+          fi
+          if git grep -nE 'nevuslab122|storePassword[[:space:]]*=[[:space:]]*"|keyPassword[[:space:]]*=[[:space:]]*"' -- .; then
+            echo "Hard-coded signing secret found" >&2
+            exit 1
+          fi
+
+      - name: Clean
+        run: gradle --no-daemon clean
+
+      - name: Unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Lint
+        run: gradle --no-daemon lintDebug
+
+      - name: Assemble debug APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Record checksum
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app-debug.apk.sha256
+
+      - name: Upload reports and APK
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: nevusquetta-v09ab-${{ github.run_number }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            B-Android/app/build/outputs/apk/debug/app-debug.apk
+            B-Android/app-debug.apk.sha256
+            B-Android/app/build/reports/
+            B-Android/app/build/test-results/
