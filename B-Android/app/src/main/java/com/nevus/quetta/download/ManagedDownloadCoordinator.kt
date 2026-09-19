@@ -1,14 +1,21 @@
 package com.nevus.quetta.download
 
-import android.app.DownloadManager
 import android.content.Context
-import android.os.Environment
 import android.os.StatFs
 import android.webkit.CookieManager
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.nevus.quetta.data.DownloadEntity
 import com.nevus.quetta.data.DownloadKinds
 import com.nevus.quetta.data.DownloadStatuses
+import java.io.File
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
@@ -25,14 +32,13 @@ sealed interface ManagedDownloadResult {
 }
 
 class ManagedDownloadCoordinator(
-    private val context: Context,
+    context: Context,
     private val repository: DownloadRepository,
-    private val transport: DownloadCoordinator = DownloadCoordinator(context),
     private val preflight: DownloadPreflightClient = DownloadPreflightClient(),
     private val secretStore: DownloadSecretStore = DownloadSecretStore(context),
 ) {
-    private val manager =
-        context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+    private val appContext = context.applicationContext
+    private val workManager = WorkManager.getInstance(appContext)
 
     fun observe(): Flow<List<DownloadEntity>> = repository.observe()
 
@@ -66,81 +72,95 @@ class ManagedDownloadCoordinator(
         val downloadId = UUID.randomUUID().toString()
         val existingNames = repository.observe().first().map { it.fileName }.toSet()
         val fileName = uniqueFileName(
-            DownloadPolicy.sanitizeFileName(probe.suggestedFileName),
+            DownloadPolicy.sanitizeFileName(
+                probe.suggestedFileName.ifBlank {
+                    contentDisposition?.takeIf(String::isNotBlank) ?: "download"
+                },
+            ),
             existingNames,
             downloadId,
         )
 
-        if (!secretStore.put(
-                downloadId,
-                DownloadSecret(
-                    url = probe.finalUrl.toString(),
-                    userAgent = userAgent,
-                    cookie = cookie,
-                    sourcePage = sourcePage,
-                ),
-            )
-        ) {
-            return ManagedDownloadResult.Failed("Metadata rahasia unduhan tidak dapat diamankan")
-        }
-
-        val result = transport.enqueue(
+        val secret = DownloadSecret(
             url = probe.finalUrl.toString(),
             userAgent = userAgent,
-            contentDisposition = contentDisposition,
-            mimeType = mimeType ?: probe.mimeType,
+            cookie = cookie,
             sourcePage = sourcePage,
-            overrideFileName = fileName,
+        )
+        if (!secretStore.put(downloadId, secret)) {
+            return ManagedDownloadResult.Failed(
+                "Metadata rahasia unduhan tidak dapat diamankan",
+            )
+        }
+
+        val now = System.currentTimeMillis()
+        val entity = DownloadEntity(
+            downloadId = downloadId,
+            systemDownloadId = null,
+            url = DownloadPolicy.redactedForStorage(probe.finalUrl),
+            sourceOrigin = sourcePage
+                ?.let(DownloadPolicy::validateHttps)
+                ?.let(DownloadPolicy::originOnly),
+            fileName = fileName,
+            mimeType = mimeType ?: probe.mimeType,
+            kind = DownloadKinds.DIRECT,
+            status = DownloadStatuses.QUEUED,
+            bytesDownloaded = 0,
+            totalBytes = probe.contentLength,
+            supportsResume = probe.supportsResume,
+            etag = probe.etag,
+            lastModified = probe.lastModified,
+            sha256 = null,
+            localUri = null,
+            errorCode = null,
+            createdAt = now,
+            updatedAt = now,
         )
 
-        return when (result) {
-            is DownloadResult.Enqueued -> {
-                val now = System.currentTimeMillis()
-                repository.upsert(
-                    DownloadEntity(
-                        downloadId = downloadId,
-                        systemDownloadId = result.id,
-                        url = DownloadPolicy.redactedForStorage(probe.finalUrl),
-                        sourceOrigin = sourcePage
-                            ?.let(DownloadPolicy::validateHttps)
-                            ?.let(DownloadPolicy::originOnly),
-                        fileName = result.fileName,
-                        mimeType = mimeType ?: probe.mimeType,
-                        kind = DownloadKinds.DIRECT,
-                        status = DownloadStatuses.QUEUED,
-                        bytesDownloaded = 0,
-                        totalBytes = probe.contentLength,
-                        supportsResume = false,
-                        etag = probe.etag,
-                        lastModified = probe.lastModified,
-                        sha256 = null,
-                        localUri = null,
-                        errorCode = null,
-                        createdAt = now,
-                        updatedAt = now,
-                    ),
-                )
-                ManagedDownloadResult.Enqueued(
-                    downloadId = downloadId,
-                    systemId = result.id,
-                    fileName = result.fileName,
-                    supportsResume = false,
-                )
-            }
-            is DownloadResult.Rejected -> {
-                secretStore.remove(downloadId)
-                ManagedDownloadResult.Rejected(result.reason)
-            }
-            is DownloadResult.Failed -> {
-                secretStore.remove(downloadId)
-                ManagedDownloadResult.Failed(result.reason)
-            }
+        return runCatching {
+            repository.upsert(entity)
+            enqueueWork(downloadId)
+            ManagedDownloadResult.Enqueued(
+                downloadId = downloadId,
+                systemId = -1,
+                fileName = fileName,
+                supportsResume = probe.supportsResume,
+            )
+        }.getOrElse { error ->
+            runCatching { workManager.cancelUniqueWork(workName(downloadId)) }
+            runCatching { repository.delete(downloadId) }
+            secretStore.remove(downloadId)
+            ManagedDownloadResult.Failed(
+                error.message?.take(120) ?: "Gagal membuat antrean unduhan",
+            )
         }
+    }
+
+    suspend fun pause(downloadId: String): Boolean {
+        val item = repository.get(downloadId) ?: return false
+        if (item.kind != DownloadKinds.DIRECT ||
+            !item.supportsResume ||
+            item.status !in setOf(DownloadStatuses.QUEUED, DownloadStatuses.RUNNING)
+        ) {
+            return false
+        }
+
+        repository.updateProgress(
+            downloadId = downloadId,
+            status = DownloadStatuses.PAUSED,
+            bytesDownloaded = item.bytesDownloaded,
+            totalBytes = item.totalBytes,
+            localUri = item.localUri,
+            errorCode = null,
+        )
+        workManager.cancelUniqueWork(workName(downloadId))
+        return true
     }
 
     suspend fun cancel(downloadId: String): Boolean {
         val item = repository.get(downloadId) ?: return false
-        item.systemDownloadId?.let { systemId -> manager.remove(systemId) }
+        if (item.kind != DownloadKinds.DIRECT) return false
+
         repository.updateProgress(
             downloadId = downloadId,
             status = DownloadStatuses.CANCELED,
@@ -149,110 +169,95 @@ class ManagedDownloadCoordinator(
             localUri = item.localUri,
             errorCode = null,
         )
+        workManager.cancelUniqueWork(workName(downloadId))
         return true
     }
 
-    suspend fun retry(
-        downloadId: String,
-        userAgent: String?,
-    ): ManagedDownloadResult {
-        val previous = repository.get(downloadId)
+    suspend fun retry(downloadId: String): ManagedDownloadResult {
+        val item = repository.get(downloadId)
             ?: return ManagedDownloadResult.Rejected("Metadata unduhan tidak ditemukan")
-        if (previous.status != DownloadStatuses.FAILED &&
-            previous.status != DownloadStatuses.CANCELED &&
-            previous.status != DownloadStatuses.MISSING
-        ) {
-            return ManagedDownloadResult.Rejected("Unduhan belum berada pada status retry")
+        if (item.kind != DownloadKinds.DIRECT) {
+            return ManagedDownloadResult.Rejected("Bukan pekerjaan unduhan langsung")
         }
-        val secret = secretStore.get(downloadId)
-            ?: return ManagedDownloadResult.Rejected(
-                "URL asli tidak tersedia; retry aman tidak dapat dilakukan",
+        if (item.status !in setOf(
+                DownloadStatuses.PAUSED,
+                DownloadStatuses.FAILED,
+                DownloadStatuses.CANCELED,
+                DownloadStatuses.MISSING,
             )
-        return enqueue(
-            url = secret.url,
-            userAgent = userAgent ?: secret.userAgent,
-            contentDisposition = null,
-            mimeType = previous.mimeType,
-            sourcePage = secret.sourcePage,
+        ) {
+            return ManagedDownloadResult.Rejected(
+                "Unduhan belum berada pada status yang dapat dilanjutkan",
+            )
+        }
+        if (!secretStore.contains(downloadId)) {
+            return ManagedDownloadResult.Rejected(
+                "Konteks aman unduhan tidak tersedia; buat unduhan baru",
+            )
+        }
+
+        repository.updateProgress(
+            downloadId = downloadId,
+            status = DownloadStatuses.QUEUED,
+            bytesDownloaded = item.bytesDownloaded,
+            totalBytes = item.totalBytes,
+            localUri = null,
+            errorCode = null,
+        )
+        enqueueWork(downloadId)
+        return ManagedDownloadResult.Enqueued(
+            downloadId = downloadId,
+            systemId = -1,
+            fileName = item.fileName,
+            supportsResume = item.supportsResume,
         )
     }
 
-    suspend fun refresh(downloadId: String): DownloadEntity? {
-        val item = repository.get(downloadId) ?: return null
-        val systemId = item.systemDownloadId ?: return item
-        manager.query(DownloadManager.Query().setFilterById(systemId)).use { cursor ->
-            if (!cursor.moveToFirst()) {
-                if (item.status == DownloadStatuses.COMPLETED && item.localUri != null) {
-                    return item
-                }
-                repository.updateProgress(
-                    downloadId = downloadId,
-                    status = DownloadStatuses.MISSING,
-                    bytesDownloaded = item.bytesDownloaded,
-                    totalBytes = item.totalBytes,
-                    localUri = item.localUri,
-                    errorCode = "SYSTEM_RECORD_MISSING",
-                )
-                return repository.get(downloadId)
-            }
-
-            val status = cursor.getInt(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS),
-            )
-            val bytes = cursor.getLong(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR),
-            )
-            val total = cursor.getLong(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES),
-            )
-            val localUri = cursor.getString(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI),
-            )
-            val reason = cursor.getInt(
-                cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON),
-            )
-
-            val mapped = when (status) {
-                DownloadManager.STATUS_PENDING -> DownloadStatuses.QUEUED
-                DownloadManager.STATUS_RUNNING -> DownloadStatuses.RUNNING
-                DownloadManager.STATUS_PAUSED -> DownloadStatuses.PAUSED
-                DownloadManager.STATUS_SUCCESSFUL -> DownloadStatuses.COMPLETED
-                DownloadManager.STATUS_FAILED -> DownloadStatuses.FAILED
-                else -> DownloadStatuses.FAILED
-            }
-
-            repository.updateProgress(
-                downloadId = downloadId,
-                status = mapped,
-                bytesDownloaded = bytes.coerceAtLeast(0),
-                totalBytes = if (total > 0) total else item.totalBytes,
-                localUri = localUri,
-                errorCode = if (mapped == DownloadStatuses.FAILED) {
-                    "DM_REASON_" + reason
-                } else {
-                    null
-                },
-            )
-            if (mapped == DownloadStatuses.COMPLETED) {
-                secretStore.remove(downloadId)
-            }
-        }
-        return repository.get(downloadId)
+    suspend fun deleteMetadata(downloadId: String): Boolean {
+        val item = repository.get(downloadId) ?: return false
+        if (item.kind != DownloadKinds.DIRECT) return false
+        workManager.cancelUniqueWork(workName(downloadId))
+        secretStore.remove(downloadId)
+        partFile(downloadId).delete()
+        repository.delete(downloadId)
+        return true
     }
 
-    suspend fun refreshAll() {
-        repository.observe().first()
-            .filter { it.kind == DownloadKinds.DIRECT && it.systemDownloadId != null }
-            .forEach { refresh(it.downloadId) }
+    private fun enqueueWork(downloadId: String) {
+        val request = OneTimeWorkRequestBuilder<ResumableDownloadWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build(),
+            )
+            .setBackoffCriteria(
+                BackoffPolicy.EXPONENTIAL,
+                30,
+                TimeUnit.SECONDS,
+            )
+            .setInputData(
+                workDataOf(ResumableDownloadWorker.KEY_DOWNLOAD_ID to downloadId),
+            )
+            .addTag(workName(downloadId))
+            .build()
+
+        workManager.enqueueUniqueWork(
+            workName(downloadId),
+            ExistingWorkPolicy.REPLACE,
+            request,
+        )
     }
 
     private fun hasStorageFor(contentLength: Long): Boolean {
         if (contentLength <= 0) return true
-        val root = Environment.getExternalStorageDirectory()
-        val available = runCatching { StatFs(root.absolutePath).availableBytes }
-            .getOrDefault(Long.MAX_VALUE)
+        val available = runCatching {
+            StatFs(appContext.filesDir.absolutePath).availableBytes
+        }.getOrDefault(0L)
         return available >= contentLength + STORAGE_RESERVE_BYTES
     }
+
+    private fun partFile(downloadId: String): File =
+        File(File(appContext.filesDir, PARTS_DIR), "$downloadId.part")
 
     private fun uniqueFileName(
         desired: String,
@@ -269,7 +274,11 @@ class ManagedDownloadCoordinator(
         }
     }
 
+    private fun workName(downloadId: String): String =
+        "nevus-direct-$downloadId"
+
     private companion object {
-        const val STORAGE_RESERVE_BYTES = 16L * 1024L * 1024L
+        const val PARTS_DIR = "nevus_download_parts"
+        const val STORAGE_RESERVE_BYTES = 64L * 1024L * 1024L
     }
 }
