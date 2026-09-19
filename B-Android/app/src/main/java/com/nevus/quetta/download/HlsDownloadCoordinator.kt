@@ -1,6 +1,7 @@
 package com.nevus.quetta.download
 
 import android.content.Context
+import android.webkit.CookieManager
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
@@ -15,31 +16,58 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class HlsDownloadCoordinator(
-    private val context: Context,
+    context: Context,
     private val repository: DownloadRepository,
+    private val secretStore: DownloadSecretStore = DownloadSecretStore(context),
 ) {
-    private val workManager = WorkManager.getInstance(context)
+    private val appContext = context.applicationContext
+    private val workManager = WorkManager.getInstance(appContext)
 
     suspend fun enqueue(
         manifestUrl: String,
         userAgent: String?,
+        sourcePage: String?,
     ): ManagedDownloadResult {
         val uri = DownloadPolicy.validateHttps(manifestUrl)
             ?: return ManagedDownloadResult.Rejected("Manifest HLS harus HTTPS valid")
+        if (!DownloadPolicy.resolvesToPublicAddress(uri)) {
+            return ManagedDownloadResult.Rejected("Tujuan HLS bukan jaringan publik yang diizinkan")
+        }
+
         val downloadId = UUID.randomUUID().toString()
         val base = uri.lastPathSegment
             ?.substringBeforeLast('.')
             ?.takeIf(String::isNotBlank)
             ?: "video"
         val fileName = DownloadPolicy.sanitizeFileName(base + "-hls")
+        val cookie = if (DownloadPolicy.safeCookieTarget(sourcePage, uri)) {
+            CookieManager.getInstance().getCookie(uri.toString())
+        } else {
+            null
+        }
+
+        if (!secretStore.put(
+                downloadId,
+                DownloadSecret(
+                    url = uri.toString(),
+                    userAgent = userAgent,
+                    cookie = cookie,
+                    sourcePage = sourcePage,
+                ),
+            )
+        ) {
+            return ManagedDownloadResult.Failed("Metadata rahasia HLS tidak dapat diamankan")
+        }
 
         val now = System.currentTimeMillis()
         repository.upsert(
             DownloadEntity(
                 downloadId = downloadId,
                 systemDownloadId = null,
-                url = uri.toString(),
-                sourceOrigin = DownloadPolicy.originOnly(uri),
+                url = DownloadPolicy.redactedForStorage(uri),
+                sourceOrigin = sourcePage
+                    ?.let(DownloadPolicy::validateHttps)
+                    ?.let(DownloadPolicy::originOnly),
                 fileName = fileName,
                 mimeType = "application/vnd.apple.mpegurl",
                 kind = DownloadKinds.HLS_VOD,
@@ -47,13 +75,16 @@ class HlsDownloadCoordinator(
                 bytesDownloaded = 0,
                 totalBytes = -1,
                 supportsResume = false,
+                etag = null,
+                lastModified = null,
+                sha256 = null,
                 localUri = null,
                 errorCode = null,
                 createdAt = now,
                 updatedAt = now,
             ),
         )
-        enqueueWork(downloadId, uri.toString(), userAgent)
+        enqueueWork(downloadId)
         return ManagedDownloadResult.Enqueued(
             downloadId = downloadId,
             systemId = -1,
@@ -76,10 +107,7 @@ class HlsDownloadCoordinator(
         return true
     }
 
-    suspend fun retry(
-        downloadId: String,
-        userAgent: String?,
-    ): ManagedDownloadResult {
+    suspend fun retry(downloadId: String): ManagedDownloadResult {
         val item = repository.get(downloadId)
             ?: return ManagedDownloadResult.Rejected("Metadata HLS tidak ditemukan")
         if (item.kind != DownloadKinds.HLS_VOD) {
@@ -90,6 +118,9 @@ class HlsDownloadCoordinator(
         ) {
             return ManagedDownloadResult.Rejected("HLS belum berada pada status retry")
         }
+        if (!secretStore.contains(downloadId)) {
+            return ManagedDownloadResult.Rejected("Secret HLS tidak tersedia untuk retry aman")
+        }
         repository.updateProgress(
             downloadId = downloadId,
             status = DownloadStatuses.QUEUED,
@@ -98,7 +129,7 @@ class HlsDownloadCoordinator(
             localUri = null,
             errorCode = null,
         )
-        enqueueWork(downloadId, item.url, userAgent)
+        enqueueWork(downloadId)
         return ManagedDownloadResult.Enqueued(
             downloadId = downloadId,
             systemId = -1,
@@ -107,11 +138,7 @@ class HlsDownloadCoordinator(
         )
     }
 
-    private fun enqueueWork(
-        downloadId: String,
-        manifestUrl: String,
-        userAgent: String?,
-    ) {
+    private fun enqueueWork(downloadId: String) {
         val request = OneTimeWorkRequestBuilder<HlsVodDownloadWorker>()
             .setConstraints(
                 Constraints.Builder()
@@ -126,10 +153,9 @@ class HlsDownloadCoordinator(
             .setInputData(
                 workDataOf(
                     HlsVodDownloadWorker.KEY_DOWNLOAD_ID to downloadId,
-                    HlsVodDownloadWorker.KEY_MANIFEST_URL to manifestUrl,
-                    HlsVodDownloadWorker.KEY_USER_AGENT to userAgent,
                 ),
             )
+            .addTag(workName(downloadId))
             .build()
 
         workManager.enqueueUniqueWork(
