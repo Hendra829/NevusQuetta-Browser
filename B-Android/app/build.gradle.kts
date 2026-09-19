@@ -75,6 +75,9 @@ android {
 
 kapt {
     correctErrorTypes = true
+    arguments {
+        arg("room.schemaLocation", file("schemas").absolutePath)
+    }
 }
 
 dependencies {
