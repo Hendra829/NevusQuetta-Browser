@@ -255,6 +255,27 @@ class BrowserViewModelTest {
     }
 
     @Test
+    fun explicitHttpUrlWithoutHostFallsBackToHomeUrl() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("https:///missing-host")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL), command.await())
+        assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
     fun latestSubmittedAddressWinsWhenRequestsOverlap() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val viewModel = BrowserViewModel(

@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -229,11 +230,13 @@ class BrowserViewModel(
         val submissionToken = ++latestSubmissionToken
         submitAddressJob = viewModelScope.launch(urlNormalizationDispatcher) {
             val normalizedUrl = normalizeUrl(input)
-            if (submissionToken != latestSubmissionToken) {
-                return@launch
+            withContext(Dispatchers.Main.immediate) {
+                if (submissionToken != latestSubmissionToken) {
+                    return@withContext
+                }
+                emitUrl(normalizedUrl)
+                _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
             }
-            emitUrl(normalizedUrl)
-            _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
         }
     }
 
@@ -286,7 +289,13 @@ class BrowserViewModel(
             val uri = URI(candidate)
             val normalizedScheme = uri.scheme?.lowercase()
             if (hasScheme) {
-                if (normalizedScheme in SAFE_SCHEMES) {
+                if (
+                    normalizedScheme in SAFE_SCHEMES &&
+                    (
+                        normalizedScheme !in NETWORK_SCHEMES ||
+                            !uri.host.isNullOrBlank()
+                        )
+                ) {
                     uri.toString()
                 } else {
                     BrowserUiState.DEFAULT_HOME_URL
@@ -302,6 +311,7 @@ class BrowserViewModel(
     }
 
     companion object {
+        private val NETWORK_SCHEMES = setOf("http", "https")
         private val SCHEME_PATTERN = Regex("^[a-zA-Z][a-zA-Z\\d+\\-.]*:.*")
         private val SAFE_SCHEMES = setOf("about", "http", "https")
     }
