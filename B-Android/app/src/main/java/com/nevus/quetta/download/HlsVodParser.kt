@@ -109,10 +109,21 @@ class HlsVodParser {
                     if (line.contains("BYTERANGE=", ignoreCase = true)) {
                         return HlsParseResult.Rejected("EXT-X-MAP BYTERANGE belum didukung")
                     }
+                    if (segments.isNotEmpty()) {
+                        return HlsParseResult.Rejected(
+                            "EXT-X-MAP setelah media segment memerlukan remux",
+                        )
+                    }
                     val raw = attribute(line, "URI")
                         ?: return HlsParseResult.Rejected("EXT-X-MAP tanpa URI valid")
-                    initSegment = resolveHttps(base, raw)
+                    val resolved = resolveHttps(base, raw)
                         ?: return HlsParseResult.Rejected("Init segment bukan HTTPS")
+                    if (initSegment != null && initSegment != resolved) {
+                        return HlsParseResult.Rejected(
+                            "Perubahan EXT-X-MAP memerlukan remux",
+                        )
+                    }
+                    initSegment = resolved
                 }
 
                 line.equals("#EXT-X-GAP", ignoreCase = true) -> {
