@@ -29,9 +29,15 @@ import androidx.core.view.WindowInsetsCompat
 import com.nevus.quetta.browser.BrowserCoordinator
 import com.nevus.quetta.data.BrowserDatabase
 import com.nevus.quetta.data.BrowserRepository
+import com.nevus.quetta.data.DownloadEntity
+import com.nevus.quetta.data.DownloadKinds
+import com.nevus.quetta.data.DownloadStatuses
 import com.nevus.quetta.databinding.ActivityMainBinding
-import com.nevus.quetta.download.DownloadCoordinator
-import com.nevus.quetta.download.DownloadResult
+import com.nevus.quetta.download.DownloadRepository
+import com.nevus.quetta.download.HlsDownloadCoordinator
+import com.nevus.quetta.download.ManagedDownloadCoordinator
+import com.nevus.quetta.download.ManagedDownloadResult
+import com.nevus.quetta.performance.RuntimePerformanceMetrics
 import com.nevus.quetta.navigation.NavigationController
 import com.nevus.quetta.navigation.NavigationTarget
 import com.nevus.quetta.tabs.BrowserTab
@@ -47,17 +53,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var coordinator: BrowserCoordinator
     private lateinit var sessions: WebViewSessionManager
-    private lateinit var downloads: DownloadCoordinator
+    private lateinit var downloads: ManagedDownloadCoordinator
+    private lateinit var hlsDownloads: HlsDownloadCoordinator
+    private lateinit var metrics: RuntimePerformanceMetrics
 
     private val bridgeHosts = mutableMapOf<String, MediaBridgeHost>()
+    private val pageStartedAt = mutableMapOf<String, Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val startPage = "https://www.google.com/"
     private val prefs by lazy { getSharedPreferences("nevus", MODE_PRIVATE) }
@@ -72,14 +83,18 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         applySystemInsets()
 
-        val repository = BrowserRepository(BrowserDatabase.get(this))
+        val database = BrowserDatabase.get(this)
+        val repository = BrowserRepository(database)
+        val downloadRepository = DownloadRepository(database)
         coordinator = BrowserCoordinator(
             tabs = TabManager(startPage),
             repository = repository,
             homeUrl = startPage,
         )
         sessions = WebViewSessionManager(this)
-        downloads = DownloadCoordinator(this)
+        downloads = ManagedDownloadCoordinator(this, downloadRepository)
+        hlsDownloads = HlsDownloadCoordinator(this, downloadRepository)
+        metrics = RuntimePerformanceMetrics(this)
 
         configureActions()
         configureBackHandling()
@@ -89,6 +104,12 @@ class MainActivity : AppCompatActivity() {
                 ?: prefs.getString("lastUrl", startPage)
             coordinator.restoreSession(fallback)
             coordinator.tabs.state.collectLatest(::renderState)
+        }
+        scope.launch {
+            while (isActive) {
+                runCatching { downloads.refreshAll() }
+                delay(DOWNLOAD_REFRESH_MS)
+            }
         }
     }
 
@@ -147,8 +168,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showActiveTab(tab: BrowserTab) {
-        currentWebView?.onPause()
-
         val webView = try {
             sessions.obtain(tab) { created -> configureWebView(tab.id, created) }
         } catch (_: PrivateProfileUnsupportedException) {
@@ -157,16 +176,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        (webView.parent as? ViewGroup)?.removeView(webView)
-        binding.webContainer.removeAllViews()
-        binding.webContainer.addView(
-            webView,
-            ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            ),
-        )
-        currentWebView = webView
+        if (currentWebView === webView && webView.parent === binding.webContainer) {
+            metrics.recordWebViewReuse()
+        } else {
+            currentWebView?.onPause()
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            binding.webContainer.removeAllViews()
+            binding.webContainer.addView(
+                webView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            currentWebView = webView
+            metrics.recordWebViewRebind()
+        }
         binding.address.setText(webView.url ?: tab.url)
         binding.errorState.visibility = View.GONE
         updateNavigationButtons(webView)
@@ -182,6 +207,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureWebView(tabId: String, webView: WebView) {
+        metrics.recordWebViewCreated()
         SecureWebViewFactory.harden(webView, debuggingEnabled = BuildConfig.DEBUG)
         val bridge = MediaBridgeHost(this, webView) { candidate ->
             runOnUiThread {
@@ -212,6 +238,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                pageStartedAt[tabId] = android.os.SystemClock.elapsedRealtime()
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
@@ -249,6 +279,9 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                pageStartedAt.remove(tabId)?.let { started ->
+                    metrics.recordPageLoad(android.os.SystemClock.elapsedRealtime() - started)
+                }
                 val tab = coordinator.tabs.tab(tabId) ?: return
                 scope.launch {
                     coordinator.pageFinished(tabId, url, view.title)
@@ -282,15 +315,17 @@ class MainActivity : AppCompatActivity() {
                 contentDisposition,
                 mimeType,
                 _ ->
-            handleDownloadResult(
-                downloads.enqueue(
-                    url = url,
-                    userAgent = userAgent,
-                    contentDisposition = contentDisposition,
-                    mimeType = mimeType,
-                    sourcePage = webView.url,
-                ),
-            )
+            scope.launch {
+                handleDownloadResult(
+                    enqueueMedia(
+                        url = url,
+                        userAgent = userAgent,
+                        contentDisposition = contentDisposition,
+                        mimeType = mimeType,
+                        sourcePage = webView.url,
+                    ),
+                )
+            }
         })
     }
 
@@ -414,6 +449,18 @@ class MainActivity : AppCompatActivity() {
             showHistory()
             true
         }
+        menu.add("Unduhan").setOnMenuItemClickListener {
+            showDownloads()
+            true
+        }
+        menu.add("Metrik performa").setOnMenuItemClickListener {
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("V0.9D Performance")
+                .setMessage(metrics.snapshotText())
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+            true
+        }
         menu.add("Hapus riwayat").setOnMenuItemClickListener {
             scope.launch {
                 coordinator.clearHistory()
@@ -476,27 +523,148 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.download_media_title)
             .setMessage(label)
             .setPositiveButton(R.string.download_action) { _, _ ->
-                handleDownloadResult(
-                    downloads.enqueue(
-                        url = candidate.url.toString(),
-                        userAgent = webView.settings.userAgentString,
-                        contentDisposition = null,
-                        mimeType = null,
-                        sourcePage = webView.url,
-                    ),
-                )
+                scope.launch {
+                    handleDownloadResult(
+                        enqueueMedia(
+                            url = candidate.url.toString(),
+                            userAgent = webView.settings.userAgentString,
+                            contentDisposition = null,
+                            mimeType = null,
+                            sourcePage = webView.url,
+                        ),
+                    )
+                }
             }
             .setNegativeButton(R.string.cancel_action, null)
             .show()
     }
 
-    private fun handleDownloadResult(result: DownloadResult) {
+    private suspend fun enqueueMedia(
+        url: String,
+        userAgent: String?,
+        contentDisposition: String?,
+        mimeType: String?,
+        sourcePage: String?,
+    ): ManagedDownloadResult {
+        return if (isHls(url, mimeType)) {
+            hlsDownloads.enqueue(
+                manifestUrl = url,
+                userAgent = userAgent,
+                sourcePage = sourcePage,
+            )
+        } else {
+            downloads.enqueue(
+                url = url,
+                userAgent = userAgent,
+                contentDisposition = contentDisposition,
+                mimeType = mimeType,
+                sourcePage = sourcePage,
+            )
+        }
+    }
+
+    private fun isHls(url: String, mimeType: String?): Boolean {
+        val normalizedMime = mimeType?.substringBefore(';')?.trim()?.lowercase()
+        if (normalizedMime == "application/vnd.apple.mpegurl" ||
+            normalizedMime == "application/x-mpegurl" ||
+            normalizedMime == "audio/mpegurl"
+        ) {
+            return true
+        }
+        return runCatching { Uri.parse(url).lastPathSegment.orEmpty().lowercase() }
+            .getOrDefault("")
+            .endsWith(".m3u8")
+    }
+
+    private fun handleDownloadResult(result: ManagedDownloadResult) {
         val message = when (result) {
-            is DownloadResult.Enqueued -> "Unduhan dimulai: " + result.fileName
-            is DownloadResult.Rejected -> result.reason
-            is DownloadResult.Failed -> "Unduhan gagal: " + result.reason
+            is ManagedDownloadResult.Enqueued -> "Masuk antrean: " + result.fileName
+            is ManagedDownloadResult.Rejected -> result.reason
+            is ManagedDownloadResult.Failed -> "Unduhan gagal: " + result.reason
         }
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showDownloads() {
+        scope.launch {
+            runCatching { downloads.refreshAll() }
+            val items = downloads.observe().first()
+            if (items.isEmpty()) {
+                Toast.makeText(this@MainActivity, "Belum ada unduhan", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val labels = items.map(::downloadLabel).toTypedArray()
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("Antrean unduhan")
+                .setItems(labels) { _, which -> showDownloadActions(items[which]) }
+                .setNegativeButton(R.string.cancel_action, null)
+                .show()
+        }
+    }
+
+    private fun downloadLabel(item: DownloadEntity): String {
+        val progress = if (item.totalBytes > 0) {
+            val percent = ((item.bytesDownloaded * 100L) / item.totalBytes)
+                .coerceIn(0, 100)
+            " · " + percent + "%"
+        } else if (item.bytesDownloaded > 0) {
+            " · " + (item.bytesDownloaded / 1024L) + " KiB"
+        } else {
+            ""
+        }
+        val kind = if (item.kind == DownloadKinds.HLS_VOD) "HLS" else "FILE"
+        return "[" + kind + "] " + item.fileName + "
+" + item.status + progress
+    }
+
+    private fun showDownloadActions(item: DownloadEntity) {
+        val actions = mutableListOf<String>()
+        if (item.status == DownloadStatuses.QUEUED ||
+            item.status == DownloadStatuses.RUNNING ||
+            item.status == DownloadStatuses.PAUSED
+        ) {
+            actions += "Batalkan"
+        }
+        if (item.status == DownloadStatuses.FAILED ||
+            item.status == DownloadStatuses.CANCELED ||
+            item.status == DownloadStatuses.MISSING
+        ) {
+            actions += "Coba lagi"
+        }
+        actions += "Tutup"
+
+        AlertDialog.Builder(this)
+            .setTitle(item.fileName)
+            .setMessage(downloadLabel(item))
+            .setItems(actions.toTypedArray()) { dialog, which ->
+                when (actions[which]) {
+                    "Batalkan" -> scope.launch {
+                        val ok = if (item.kind == DownloadKinds.HLS_VOD) {
+                            hlsDownloads.cancel(item.downloadId)
+                        } else {
+                            downloads.cancel(item.downloadId)
+                        }
+                        Toast.makeText(
+                            this@MainActivity,
+                            if (ok) "Unduhan dibatalkan" else "Tidak dapat membatalkan",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                    "Coba lagi" -> scope.launch {
+                        val result = if (item.kind == DownloadKinds.HLS_VOD) {
+                            hlsDownloads.retry(item.downloadId)
+                        } else {
+                            downloads.retry(
+                                item.downloadId,
+                                currentWebView?.settings?.userAgentString,
+                            )
+                        }
+                        handleDownloadResult(result)
+                    }
+                    else -> dialog.dismiss()
+                }
+            }
+            .show()
     }
 
     private fun trimInactiveSessions(state: TabState, maxResident: Int) {
@@ -542,14 +710,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         DataVault.lockNow()
+        if (::metrics.isInitialized) metrics.flush()
         super.onStop()
     }
 
     override fun onDestroy() {
+        if (::metrics.isInitialized) metrics.flush()
         bridgeHosts.values.forEach(MediaBridgeHost::clear)
         bridgeHosts.clear()
         if (::sessions.isInitialized) sessions.destroyAll()
         scope.cancel()
         super.onDestroy()
+    }
+
+    private companion object {
+        const val DOWNLOAD_REFRESH_MS = 1500L
     }
 }
