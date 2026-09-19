@@ -229,7 +229,8 @@ class BrowserViewModel(
 
         return try {
             val uri = URI(candidate)
-            if (hasScheme && !uri.scheme.isNullOrBlank()) {
+            val normalizedScheme = uri.scheme?.lowercase()
+            if (hasScheme && normalizedScheme in SAFE_SCHEMES) {
                 uri.toString()
             } else if (uri.host.isNullOrBlank()) {
                 BrowserUiState.DEFAULT_HOME_URL
@@ -243,6 +244,7 @@ class BrowserViewModel(
 
     companion object {
         private val SCHEME_PATTERN = Regex("^[a-zA-Z][a-zA-Z\\d+\\-.]*:.*")
+        private val SAFE_SCHEMES = setOf("about", "http", "https")
     }
 }
 

@@ -33,6 +33,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -98,9 +99,6 @@ fun BrowserScreen(
     DisposableEffect(webView, webViewClient, webChromeClient) {
         webView.webViewClient = webViewClient
         webView.webChromeClient = webChromeClient
-        if (webView.url == null) {
-            webView.loadUrl(uiState.currentUrl)
-        }
 
         onDispose {
             webView.stopLoading()
@@ -108,6 +106,12 @@ fun BrowserScreen(
             webView.webViewClient = null
             (webView.parent as? ViewGroup)?.removeView(webView)
             webView.destroy()
+        }
+    }
+
+    LaunchedEffect(webView, uiState.currentUrl) {
+        if (webView.url == null && uiState.currentUrl.isNotBlank()) {
+            webView.loadUrl(uiState.currentUrl)
         }
     }
 
@@ -127,7 +131,7 @@ fun BrowserScreen(
 
         if (uiState.isLoading) {
             LinearProgressIndicator(
-                progress = uiState.progress / 100f,
+                progress = { uiState.progress / 100f },
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics {
@@ -160,6 +164,7 @@ private fun NavigationToolbar(
     onReloadStopClicked: () -> Unit,
     onHomeClicked: () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
     val backDescription = stringResource(R.string.browser_back)
     val forwardDescription = stringResource(R.string.browser_forward)
     val stopDescription = stringResource(R.string.browser_stop_loading)
@@ -225,7 +230,10 @@ private fun NavigationToolbar(
                 imeAction = ImeAction.Go,
             ),
             keyboardActions = KeyboardActions(
-                onGo = { onAddressSubmitted() },
+                onGo = {
+                    onAddressSubmitted()
+                    focusManager.clearFocus()
+                },
             ),
         )
     }

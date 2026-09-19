@@ -213,6 +213,27 @@ class BrowserViewModelTest {
     }
 
     @Test
+    fun dangerousSchemeFallsBackToHomeUrl() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("javascript:alert(1)")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL), command.await())
+        assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
     fun latestSubmittedAddressWinsWhenRequestsOverlap() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val viewModel = BrowserViewModel(
@@ -232,5 +253,25 @@ class BrowserViewModelTest {
 
         assertEquals(BrowserCommand.LoadUrl("https://second.example"), command.await())
         assertEquals("https://second.example", viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
+    fun submitAddressImmediatelyResetsLoadingFeedback() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        viewModel.onPageFinished("https://example.com", canGoBack = false, canGoForward = false)
+        runCurrent()
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertEquals(100, viewModel.uiState.value.progress)
+
+        viewModel.submitAddress("example.org")
+
+        assertTrue(viewModel.uiState.value.isLoading)
+        assertEquals(0, viewModel.uiState.value.progress)
     }
 }
