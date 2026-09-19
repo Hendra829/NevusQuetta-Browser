@@ -336,7 +336,7 @@ class HlsVodDownloadWorker(
                 digest.update(buffer, 0, read)
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
     private fun withExtension(base: String, extension: String): String {
@@ -390,6 +390,11 @@ class HlsVodDownloadWorker(
     private fun sanitizeError(error: Throwable): String =
         (error.message ?: error::class.java.simpleName)
             .replace(Regex("""https://[^\s]+"""), "[url]")
+            .replace(
+                Regex("""(?i)(token|key|sig|signature|auth)=([^&\s]+)"""),
+            ) { match ->
+                match.groupValues[1] + "=[redacted]"
+            }
             .take(160)
 
     private data class Response(
