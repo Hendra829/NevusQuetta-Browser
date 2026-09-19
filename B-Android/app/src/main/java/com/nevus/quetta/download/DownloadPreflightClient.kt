@@ -15,6 +15,8 @@ data class DownloadProbe(
     val contentLength: Long,
     val supportsResume: Boolean,
     val suggestedFileName: String,
+    val etag: String?,
+    val lastModified: String?,
 )
 
 sealed interface DownloadProbeResult {
@@ -38,6 +40,12 @@ class DownloadPreflightClient(
             ?: return@withContext DownloadProbeResult.Rejected("URL unduhan harus HTTPS valid")
 
         repeat(maxRedirects + 1) { redirectCount ->
+            if (!DownloadPolicy.resolvesToPublicAddress(current)) {
+                return@withContext DownloadProbeResult.Rejected(
+                    "Tujuan unduhan bukan alamat jaringan publik yang diizinkan",
+                )
+            }
+
             val connection = open(current)
             try {
                 connection.instanceFollowRedirects = false
@@ -60,12 +68,7 @@ class DownloadPreflightClient(
                     }
                     val location = connection.getHeaderField("Location")
                         ?: return@withContext DownloadProbeResult.Rejected("Redirect tanpa Location")
-                    val resolved = runCatching {
-                        Uri.parse(current.toString()).buildUpon()
-                        URL(current.toString()).toURI().resolve(location).toString()
-                    }.getOrNull()
-                        ?: return@withContext DownloadProbeResult.Rejected("Redirect tidak valid")
-                    current = DownloadPolicy.validateHttps(resolved)
+                    current = DownloadPolicy.resolveRedirect(current, location)
                         ?: return@withContext DownloadProbeResult.Rejected(
                             "Redirect keluar dari HTTPS yang diizinkan",
                         )
@@ -81,9 +84,7 @@ class DownloadPreflightClient(
                 val mime = connection.contentType?.substringBefore(';')?.trim()
                 val disposition = connection.getHeaderField("Content-Disposition")
                 val contentRange = connection.getHeaderField("Content-Range")
-                val totalFromRange = contentRange
-                    ?.substringAfterLast('/')
-                    ?.toLongOrNull()
+                val totalFromRange = DownloadPolicy.parseContentRangeTotal(contentRange)
                 val length = totalFromRange
                     ?: connection.getHeaderFieldLong("Content-Length", -1L)
                 val supportsRange =
@@ -103,6 +104,8 @@ class DownloadPreflightClient(
                         contentLength = length,
                         supportsResume = supportsRange,
                         suggestedFileName = DownloadPolicy.sanitizeFileName(guessed),
+                        etag = connection.getHeaderField("ETag")?.take(256),
+                        lastModified = connection.getHeaderField("Last-Modified")?.take(256),
                     ),
                 )
             } finally {
