@@ -4,20 +4,35 @@ import java.net.URI
 
 sealed interface HlsParseResult {
     data class Media(
-        val segments: List<String>,
+        val segments: List<HlsSegment>,
         val initSegment: String?,
+        val gapCount: Int,
+        val hasDiscontinuity: Boolean,
     ) : HlsParseResult
 
     data class Master(
         val variants: List<HlsVariant>,
+        val audioRenditions: List<HlsRendition>,
     ) : HlsParseResult
 
     data class Rejected(val reason: String) : HlsParseResult
 }
 
+data class HlsSegment(
+    val url: String,
+    val discontinuityBefore: Boolean,
+)
+
 data class HlsVariant(
     val url: String,
     val bandwidth: Long?,
+    val audioGroup: String?,
+)
+
+data class HlsRendition(
+    val groupId: String,
+    val name: String?,
+    val url: String?,
 )
 
 class HlsVodParser {
@@ -54,51 +69,116 @@ class HlsVodParser {
         }
 
         var initSegment: String? = null
-        val segments = mutableListOf<String>()
+        var pendingGap = false
+        var pendingDiscontinuity = false
+        var gapCount = 0
+        var hasDiscontinuity = false
+        val segments = mutableListOf<HlsSegment>()
+
         lines.forEach { line ->
             when {
                 line.startsWith("#EXT-X-MAP:", ignoreCase = true) -> {
-                    val quoted = Regex("""URI="([^"]+)"""").find(line)?.groupValues?.getOrNull(1)
+                    val quoted = attribute(line, "URI")
                         ?: return HlsParseResult.Rejected("EXT-X-MAP tanpa URI valid")
-                    initSegment = resolveHttps(base, quoted)
+                    val resolved = resolveHttps(base, quoted)
                         ?: return HlsParseResult.Rejected("Init segment bukan HTTPS")
+                    if (initSegment != null && initSegment != resolved) {
+                        return HlsParseResult.Rejected(
+                            "Perubahan EXT-X-MAP di tengah playlist belum didukung",
+                        )
+                    }
+                    initSegment = resolved
+                }
+                line.equals("#EXT-X-GAP", ignoreCase = true) -> pendingGap = true
+                line.equals("#EXT-X-DISCONTINUITY", ignoreCase = true) -> {
+                    pendingDiscontinuity = true
+                    hasDiscontinuity = true
                 }
                 !line.startsWith("#") -> {
                     val resolved = resolveHttps(base, line)
                         ?: return HlsParseResult.Rejected("Segment bukan HTTPS")
-                    segments += resolved
+                    if (pendingGap) {
+                        gapCount += 1
+                        pendingGap = false
+                        pendingDiscontinuity = false
+                    } else {
+                        segments += HlsSegment(
+                            url = resolved,
+                            discontinuityBefore = pendingDiscontinuity,
+                        )
+                        pendingDiscontinuity = false
+                    }
                 }
             }
         }
 
-        if (segments.isEmpty()) return HlsParseResult.Rejected("Playlist tidak memiliki segment")
-        return HlsParseResult.Media(segments, initSegment)
+        if (segments.isEmpty()) return HlsParseResult.Rejected("Playlist tidak memiliki segment aktif")
+        return HlsParseResult.Media(
+            segments = segments,
+            initSegment = initSegment,
+            gapCount = gapCount,
+            hasDiscontinuity = hasDiscontinuity,
+        )
     }
 
     private fun parseMaster(base: URI, lines: List<String>): HlsParseResult {
+        val renditions = lines
+            .filter { it.startsWith("#EXT-X-MEDIA:", ignoreCase = true) }
+            .filter { attribute(it, "TYPE")?.equals("AUDIO", ignoreCase = true) == true }
+            .mapNotNull { line ->
+                val group = attribute(line, "GROUP-ID") ?: return@mapNotNull null
+                val rawUri = attribute(line, "URI")
+                val resolved = rawUri?.let { resolveHttps(base, it) }
+                if (rawUri != null && resolved == null) return HlsParseResult.Rejected(
+                    "Audio rendition bukan HTTPS",
+                )
+                HlsRendition(
+                    groupId = group,
+                    name = attribute(line, "NAME"),
+                    url = resolved,
+                )
+            }
+
         val variants = mutableListOf<HlsVariant>()
         var pendingBandwidth: Long? = null
+        var pendingAudioGroup: String? = null
         var awaitingUrl = false
 
         lines.forEach { line ->
             when {
                 line.startsWith("#EXT-X-STREAM-INF:", ignoreCase = true) -> {
-                    pendingBandwidth = Regex("""BANDWIDTH=(\d+)""", RegexOption.IGNORE_CASE)
-                        .find(line)?.groupValues?.getOrNull(1)?.toLongOrNull()
+                    pendingBandwidth = attribute(line, "BANDWIDTH")?.toLongOrNull()
+                    pendingAudioGroup = attribute(line, "AUDIO")
                     awaitingUrl = true
                 }
                 awaitingUrl && !line.startsWith("#") -> {
                     val resolved = resolveHttps(base, line)
                         ?: return HlsParseResult.Rejected("Variant HLS bukan HTTPS")
-                    variants += HlsVariant(resolved, pendingBandwidth)
+                    variants += HlsVariant(
+                        url = resolved,
+                        bandwidth = pendingBandwidth,
+                        audioGroup = pendingAudioGroup,
+                    )
                     pendingBandwidth = null
+                    pendingAudioGroup = null
                     awaitingUrl = false
                 }
             }
         }
 
         if (variants.isEmpty()) return HlsParseResult.Rejected("Master playlist tanpa variant")
-        return HlsParseResult.Master(variants)
+        return HlsParseResult.Master(variants, renditions)
+    }
+
+    private fun attribute(line: String, name: String): String? {
+        val body = line.substringAfter(':', "")
+        val regex = Regex(
+            "(?:^|,)" + Regex.escape(name) + "=(?:\"([^\"]*)\"|([^,]*))",
+            RegexOption.IGNORE_CASE,
+        )
+        val match = regex.find(body) ?: return null
+        return match.groupValues[1].takeIf(String::isNotEmpty)
+            ?: match.groupValues[2].trim().takeIf(String::isNotEmpty)
     }
 
     private fun resolveHttps(base: URI, raw: String): String? {
