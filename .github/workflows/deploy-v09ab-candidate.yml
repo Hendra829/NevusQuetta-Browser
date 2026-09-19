@@ -1,9 +1,9 @@
 name: Deploy V0.9AB Verified Candidate
 
 on:
-  push:
+  pull_request:
     branches:
-      - infra/vps-domain
+      - feat/v09ab-hardening
     paths:
       - ".github/workflows/deploy-v09ab-candidate.yml"
 
@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: deploy-v09ab-verified-candidate
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   SOURCE_SHA: 77c78aa9c721c04d69e35af78b7bf0a32ccf0ec0
