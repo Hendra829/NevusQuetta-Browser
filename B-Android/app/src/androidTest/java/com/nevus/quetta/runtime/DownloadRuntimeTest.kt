@@ -32,7 +32,7 @@ class DownloadRuntimeTest {
 
         var status = DownloadManager.STATUS_PENDING
         var reason = 0
-        repeat(60) {
+        for (attempt in 0 until 60) {
             manager.query(DownloadManager.Query().setFilterById(id)).use { cursor ->
                 if (cursor.moveToFirst()) {
                     status = cursor.getInt(
@@ -46,7 +46,7 @@ class DownloadRuntimeTest {
             if (status == DownloadManager.STATUS_SUCCESSFUL ||
                 status == DownloadManager.STATUS_FAILED
             ) {
-                return@repeat
+                break
             }
             SystemClock.sleep(1000)
         }
