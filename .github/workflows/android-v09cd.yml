@@ -63,6 +63,50 @@ jobs:
             exit 1
           fi
 
+      - name: Package complete sanitized source snapshot
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          OUT="$GITHUB_WORKSPACE/source-package"
+          STAGE="$RUNNER_TEMP/nevus-source-stage"
+          rm -rf "$OUT" "$STAGE"
+          mkdir -p "$OUT" "$STAGE"
+
+          git archive --format=tar HEAD | tar -xf - -C "$STAGE"
+
+          find "$STAGE" -type f \(             -iname '*v0.8*.zip' -o             -iname '*v0.8*.tar' -o             -iname '*v0.8*.tar.gz' -o             -iname '*v0.8*.tgz' -o             -iname '*v0.8*.7z'           \) -delete
+
+          find "$STAGE" -depth -type d \(             -name build -o             -name .gradle -o             -name cache -o             -name caches -o             -name node_modules           \) -exec rm -rf {} +
+
+          mapfile -t forbidden < <(
+            find "$STAGE" -type f \(               -name '.env' -o -name '.env.*' -o               -name '*.jks' -o -name '*.keystore' -o               -name 'local.properties' -o               -name 'secrets.properties' -o               -name 'credentials.json' -o               -name 'id_rsa' -o -name 'id_ed25519'             \) -print
+          )
+          if (( ${#forbidden[@]} > 0 )); then
+            printf 'Forbidden secret/signing file found: %s\n' "${forbidden[@]}" >&2
+            exit 1
+          fi
+
+          {
+            echo "NevusQuetta complete source snapshot"
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Branch: ${GITHUB_REF_NAME}"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Generated UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Secrets/keystores/cache/build outputs are intentionally excluded."
+          } > "$STAGE/SNAPSHOT-INFO.txt"
+
+          (
+            cd "$STAGE"
+            find . -type f -print | sort > "$OUT/SOURCE-FILES.txt"
+            zip -X -q -r "$OUT/NevusQuetta-Complete-Source-2026-09-19.zip" .
+          )
+          (
+            cd "$OUT"
+            sha256sum NevusQuetta-Complete-Source-2026-09-19.zip > SOURCE-SHA256SUMS.txt
+          )
+          unzip -t "$OUT/NevusQuetta-Complete-Source-2026-09-19.zip"
+
       - name: Clean
         run: ./gradlew --no-daemon clean
 
@@ -106,3 +150,6 @@ jobs:
             B-Android/app/build/reports/
             B-Android/app/build/test-results/
             B-Android/app/schemas/
+            source-package/NevusQuetta-Complete-Source-2026-09-19.zip
+            source-package/SOURCE-SHA256SUMS.txt
+            source-package/SOURCE-FILES.txt
