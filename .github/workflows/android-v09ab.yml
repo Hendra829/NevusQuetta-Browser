@@ -38,9 +38,10 @@ jobs:
 
       - name: Install Android packages
         run: |
-          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager \
+          sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager_bin"
+          yes | "$sdkmanager_bin" --licenses >/dev/null
+          "$sdkmanager_bin" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0" \
