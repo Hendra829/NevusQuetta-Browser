@@ -1,6 +1,8 @@
 package com.nevus.quetta.download
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -8,19 +10,16 @@ class HlsVodParserTest {
     private val parser = HlsVodParser()
 
     @Test
-    fun `parses HTTPS VOD media playlist and skips gap segments`() {
+    fun parsesHttpsVodIncludingOpaqueSegments() {
         val result = parser.parse(
             "https://media.example.com/path/index.m3u8",
             """
             #EXTM3U
             #EXT-X-TARGETDURATION:10
             #EXTINF:10,
-            seg1.ts
-            #EXT-X-GAP
+            seg1
             #EXTINF:10,
-            missing.ts
-            #EXTINF:10,
-            https://cdn.example.com/seg2.ts
+            https://cdn.example.com/blob?id=2
             #EXT-X-ENDLIST
             """.trimIndent(),
         )
@@ -28,16 +27,41 @@ class HlsVodParserTest {
         require(result is HlsParseResult.Media)
         assertEquals(
             listOf(
-                "https://media.example.com/path/seg1.ts",
-                "https://cdn.example.com/seg2.ts",
+                "https://media.example.com/path/seg1",
+                "https://cdn.example.com/blob?id=2",
             ),
-            result.segments,
+            result.segments.map(HlsSegment::url),
         )
-        assertEquals(1, result.skippedGapSegments)
+        assertEquals(0, result.gapCount)
     }
 
     @Test
-    fun `rejects encrypted playlist`() {
+    fun skipsGapAndRecordsDiscontinuity() {
+        val result = parser.parse(
+            "https://media.example.com/index.m3u8",
+            """
+            #EXTM3U
+            #EXTINF:10,
+            seg1.ts
+            #EXT-X-GAP
+            #EXTINF:10,
+            missing.ts
+            #EXT-X-DISCONTINUITY
+            #EXTINF:10,
+            seg2.ts
+            #EXT-X-ENDLIST
+            """.trimIndent(),
+        )
+
+        require(result is HlsParseResult.Media)
+        assertEquals(2, result.segments.size)
+        assertEquals(1, result.gapCount)
+        assertTrue(result.hasDiscontinuity)
+        assertTrue(result.segments.last().discontinuityBefore)
+    }
+
+    @Test
+    fun rejectsEncryptedPlaylist() {
         val result = parser.parse(
             "https://media.example.com/index.m3u8",
             """
@@ -52,7 +76,7 @@ class HlsVodParserTest {
     }
 
     @Test
-    fun `rejects live playlist without endlist`() {
+    fun rejectsLivePlaylistWithoutEndlist() {
         val result = parser.parse(
             "https://media.example.com/index.m3u8",
             """
@@ -65,66 +89,47 @@ class HlsVodParserTest {
     }
 
     @Test
-    fun `rejects discontinuity instead of producing corrupt concatenation`() {
-        val result = parser.parse(
-            "https://media.example.com/index.m3u8",
-            """
-            #EXTM3U
-            #EXTINF:10,
-            a.ts
-            #EXT-X-DISCONTINUITY
-            #EXTINF:10,
-            b.ts
-            #EXT-X-ENDLIST
-            """.trimIndent(),
-        )
-        require(result is HlsParseResult.Rejected)
-        assertTrue(result.reason.contains("DISCONTINUITY"))
-    }
-
-    @Test
-    fun `parses master metadata and selects highest compatible embedded-audio variant`() {
+    fun parsesMasterVariantsAndExternalAudioRendition() {
         val result = parser.parse(
             "https://media.example.com/master.m3u8",
             """
             #EXTM3U
-            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="external",NAME="Bahasa",DEFAULT=YES,AUTOSELECT=YES,URI="audio/id.m3u8"
-            #EXT-X-STREAM-INF:BANDWIDTH=1000000,AVERAGE-BANDWIDTH=900000,RESOLUTION=1280x720,FRAME-RATE=30,CODECS="avc1.4d401f,mp4a.40.2"
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Indonesia",URI="audio/id.m3u8"
+            #EXT-X-STREAM-INF:BANDWIDTH=1000000,AUDIO="aud"
             low/index.m3u8
-            #EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=3840x2160,FRAME-RATE=60,CODECS="hvc1.1.6.L120,mp4a.40.2"
-            uhd/index.m3u8
-            #EXT-X-STREAM-INF:BANDWIDTH=12000000,RESOLUTION=3840x2160,AUDIO="external"
-            uhd-external/index.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=3000000,AUDIO="aud"
+            high/index.m3u8
             """.trimIndent(),
         )
 
         require(result is HlsParseResult.Master)
-        assertEquals(3, result.variants.size)
-        assertEquals(1, result.audioRenditions.size)
-
-        val selected = parser.selectVariant(result)
-        require(selected is HlsVariantSelection.Selected)
+        assertEquals(2, result.variants.size)
+        assertEquals(3_000_000L, result.variants.last().bandwidth)
+        assertEquals("aud", result.variants.last().audioGroup)
         assertEquals(
-            "https://media.example.com/uhd/index.m3u8",
-            selected.variant.url,
+            "https://media.example.com/high/index.m3u8",
+            result.variants.last().url,
         )
-        assertEquals(3840, selected.variant.width)
-        assertEquals(2160, selected.variant.height)
+        assertEquals(1, result.audioRenditions.size)
+        assertEquals(
+            "https://media.example.com/audio/id.m3u8",
+            result.audioRenditions.single().url,
+        )
     }
 
     @Test
-    fun `rejects master when every variant requires external audio remux`() {
+    fun inBandAudioRenditionHasNoExternalUrl() {
         val result = parser.parse(
             "https://media.example.com/master.m3u8",
             """
             #EXTM3U
-            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Bahasa",DEFAULT=YES,AUTOSELECT=YES,URI="audio/id.m3u8"
-            #EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080,AUDIO="audio"
-            video/index.m3u8
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Muxed"
+            #EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aud"
+            video.m3u8
             """.trimIndent(),
         )
         require(result is HlsParseResult.Master)
-        val selected = parser.selectVariant(result)
-        assertTrue(selected is HlsVariantSelection.Rejected)
+        assertNull(result.audioRenditions.single().url)
+        assertFalse(result.variants.isEmpty())
     }
 }
