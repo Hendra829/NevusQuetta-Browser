@@ -54,7 +54,7 @@ jobs:
 
       - name: Verify no committed secrets or signing material
         run: |
-          if git ls-files | grep -E '(\.jks$|\.keystore$|(^|/)\.env($|\.)|secrets\.properties$'; then
+          if git ls-files | grep -E '(\.jks$|\.keystore$|(^|/)\.env($|\.)|secrets\.properties$)'; then
             echo "Sensitive signing/secret material must not be committed" >&2
             exit 1
           fi
