@@ -3,6 +3,8 @@ package com.nevus.quetta
 import android.app.Application
 import com.nevus.quetta.cleanup.CleanupManager
 import com.nevus.quetta.cleanup.CleanupPolicy
+import androidx.webkit.ProfileStore
+import androidx.webkit.WebViewFeature
 import com.nevus.quetta.data.BrowserDatabase
 import kotlin.concurrent.thread
 
@@ -10,6 +12,7 @@ class NevusApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         initializeRuleset()
+        clearOrphanPrivateProfiles()
         BrowserDatabase.get(this)
         scheduleBoundedCleanup()
     }
@@ -25,6 +28,16 @@ class NevusApplication : Application() {
             .putBoolean("rulesetLoaded", loaded)
             .putInt("rulesetVersion", if (loaded) NativeGuard.rulesetVersion else 0)
             .apply()
+    }
+
+    private fun clearOrphanPrivateProfiles() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return
+        runCatching {
+            val store = ProfileStore.getInstance()
+            store.getAllProfileNames()
+                .filter { it.startsWith(PRIVATE_PROFILE_PREFIX) }
+                .forEach { name -> runCatching { store.deleteProfile(name) } }
+        }
     }
 
     private fun scheduleBoundedCleanup() {
@@ -51,6 +64,7 @@ class NevusApplication : Application() {
     }
 
     private companion object {
+        const val PRIVATE_PROFILE_PREFIX = "nevus_private_"
         const val CLEANUP_INTERVAL_MS = 24L * 60L * 60L * 1000L
         const val CACHE_MAX_AGE_MS = 3L * 24L * 60L * 60L * 1000L
     }
