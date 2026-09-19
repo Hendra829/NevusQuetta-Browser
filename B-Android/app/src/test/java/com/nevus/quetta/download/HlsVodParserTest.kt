@@ -30,13 +30,13 @@ class HlsVodParserTest {
                 "https://media.example.com/path/seg1",
                 "https://cdn.example.com/blob?id=2",
             ),
-            result.segments.map(HlsSegment::url),
+            result.segments,
         )
-        assertEquals(0, result.gapCount)
+        assertEquals(0, result.skippedGapSegments)
     }
 
     @Test
-    fun skipsGapAndRecordsDiscontinuity() {
+    fun skipsExtXGapWithoutRequestingMissingSegment() {
         val result = parser.parse(
             "https://media.example.com/index.m3u8",
             """
@@ -46,7 +46,6 @@ class HlsVodParserTest {
             #EXT-X-GAP
             #EXTINF:10,
             missing.ts
-            #EXT-X-DISCONTINUITY
             #EXTINF:10,
             seg2.ts
             #EXT-X-ENDLIST
@@ -54,10 +53,32 @@ class HlsVodParserTest {
         )
 
         require(result is HlsParseResult.Media)
-        assertEquals(2, result.segments.size)
-        assertEquals(1, result.gapCount)
-        assertTrue(result.hasDiscontinuity)
-        assertTrue(result.segments.last().discontinuityBefore)
+        assertEquals(
+            listOf(
+                "https://media.example.com/seg1.ts",
+                "https://media.example.com/seg2.ts",
+            ),
+            result.segments,
+        )
+        assertEquals(1, result.skippedGapSegments)
+    }
+
+    @Test
+    fun rejectsDiscontinuityUntilTimelineRemuxIsAvailable() {
+        val result = parser.parse(
+            "https://media.example.com/index.m3u8",
+            """
+            #EXTM3U
+            #EXTINF:10,
+            seg1.ts
+            #EXT-X-DISCONTINUITY
+            #EXTINF:10,
+            seg2.ts
+            #EXT-X-ENDLIST
+            """.trimIndent(),
+        )
+        assertTrue(result is HlsParseResult.Rejected)
+        assertTrue((result as HlsParseResult.Rejected).reason.contains("DISCONTINUITY"))
     }
 
     @Test
@@ -89,47 +110,57 @@ class HlsVodParserTest {
     }
 
     @Test
-    fun parsesMasterVariantsAndExternalAudioRendition() {
+    fun parsesMasterAndRejectsExternalAudioOnlyVariant() {
         val result = parser.parse(
             "https://media.example.com/master.m3u8",
             """
             #EXTM3U
-            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Indonesia",URI="audio/id.m3u8"
-            #EXT-X-STREAM-INF:BANDWIDTH=1000000,AUDIO="aud"
-            low/index.m3u8
-            #EXT-X-STREAM-INF:BANDWIDTH=3000000,AUDIO="aud"
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Indonesia",LANGUAGE="id",DEFAULT=YES,AUTOSELECT=YES,URI="audio/id.m3u8"
+            #EXT-X-STREAM-INF:BANDWIDTH=3000000,AVERAGE-BANDWIDTH=2500000,RESOLUTION=1920x1080,FRAME-RATE=60.0,AUDIO="aud"
             high/index.m3u8
             """.trimIndent(),
         )
 
         require(result is HlsParseResult.Master)
-        assertEquals(2, result.variants.size)
-        assertEquals(3_000_000L, result.variants.last().bandwidth)
-        assertEquals("aud", result.variants.last().audioGroup)
-        assertEquals(
-            "https://media.example.com/high/index.m3u8",
-            result.variants.last().url,
-        )
-        assertEquals(1, result.audioRenditions.size)
+        assertEquals(1, result.variants.size)
+        assertEquals("aud", result.variants.single().audioGroup)
+        assertEquals(1920, result.variants.single().width)
+        assertEquals(1080, result.variants.single().height)
+        assertEquals("id", result.audioRenditions.single().language)
         assertEquals(
             "https://media.example.com/audio/id.m3u8",
             result.audioRenditions.single().url,
         )
+        assertTrue(parser.selectVariant(result) is HlsVariantSelection.Rejected)
     }
 
     @Test
-    fun inBandAudioRenditionHasNoExternalUrl() {
+    fun selectsInBandAudioVariantAndHonorsQualityPolicy() {
         val result = parser.parse(
             "https://media.example.com/master.m3u8",
             """
             #EXTM3U
-            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Muxed"
-            #EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO="aud"
-            video.m3u8
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="Muxed",DEFAULT=YES,AUTOSELECT=YES
+            #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=1280x720,AUDIO="aud"
+            low.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=4000000,RESOLUTION=3840x2160,AUDIO="aud"
+            high.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=7680x4320,AUDIO="aud"
+            too-high.m3u8
             """.trimIndent(),
         )
+
         require(result is HlsParseResult.Master)
         assertNull(result.audioRenditions.single().url)
-        assertFalse(result.variants.isEmpty())
+        val selection = parser.selectVariant(
+            result,
+            HlsSelectionPolicy(maxWidth = 3840, maxHeight = 2160),
+        )
+        require(selection is HlsVariantSelection.Selected)
+        assertEquals(
+            "https://media.example.com/high.m3u8",
+            selection.variant.url,
+        )
+        assertFalse(selection.variant.width == 7680)
     }
 }
