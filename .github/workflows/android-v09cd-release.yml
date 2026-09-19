@@ -84,7 +84,7 @@ jobs:
         working-directory: B-Android
         run: |
           set -euo pipefail
-          gradle --no-daemon clean testDebugUnitTest lintRelease assembleRelease
+          ./gradlew --no-daemon clean testDebugUnitTest lintRelease assembleRelease
 
       - name: Verify release signature alignment and version
         run: |
@@ -158,7 +158,7 @@ jobs:
 
       - name: Build signed release for runtime gate
         working-directory: B-Android
-        run: gradle --no-daemon assembleRelease
+        run: ./gradlew --no-daemon assembleRelease
 
       - name: Boot emulator and install signed release
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
