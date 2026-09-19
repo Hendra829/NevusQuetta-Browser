@@ -1,0 +1,38 @@
+package com.nevus.quetta.web
+
+import android.app.Application
+import android.webkit.CookieManager
+import android.webkit.WebSettings
+import android.webkit.WebView
+import androidx.test.core.app.ApplicationProvider
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class SecureWebViewFactoryTest {
+    @Test
+    fun `hardened settings disable dangerous access paths`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val webView = WebView(context)
+
+        SecureWebViewFactory.harden(webView, debuggingEnabled = false)
+
+        with(webView.settings) {
+            assertTrue(javaScriptEnabled)
+            assertTrue(domStorageEnabled)
+            assertFalse(allowFileAccess)
+            assertFalse(allowContentAccess)
+            assertFalse(javaScriptCanOpenWindowsAutomatically)
+            assertEquals(WebSettings.MIXED_CONTENT_NEVER_ALLOW, mixedContentMode)
+            assertTrue(safeBrowsingEnabled)
+        }
+        assertFalse(CookieManager.getInstance().acceptThirdPartyCookies(webView))
+        webView.destroy()
+    }
+}
