@@ -82,6 +82,25 @@ class HlsVodParserTest {
     }
 
     @Test
+    fun rejectsInitMapChangeAfterMediaStarts() {
+        val result = parser.parse(
+            "https://media.example.com/index.m3u8",
+            """
+            #EXTM3U
+            #EXT-X-MAP:URI="init-a.mp4"
+            #EXTINF:4,
+            part-1.m4s
+            #EXT-X-MAP:URI="init-b.mp4"
+            #EXTINF:4,
+            part-2.m4s
+            #EXT-X-ENDLIST
+            """.trimIndent(),
+        )
+        assertTrue(result is HlsParseResult.Rejected)
+        assertTrue((result as HlsParseResult.Rejected).reason.contains("EXT-X-MAP"))
+    }
+
+    @Test
     fun rejectsEncryptedPlaylist() {
         val result = parser.parse(
             "https://media.example.com/index.m3u8",
