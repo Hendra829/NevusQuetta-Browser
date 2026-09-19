@@ -241,6 +241,7 @@ class HlsVodDownloadWorker(
             connection.readTimeout = READ_TIMEOUT_MS
             connection.instanceFollowRedirects = false
             connection.useCaches = false
+            connection.setRequestProperty("Accept-Encoding", "identity")
             secret.userAgent?.takeIf(String::isNotBlank)
                 ?.let { connection.setRequestProperty("User-Agent", it) }
             DownloadPolicy.safeReferrer(secret.sourcePage, current)
