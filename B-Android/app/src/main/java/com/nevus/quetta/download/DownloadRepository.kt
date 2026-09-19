@@ -41,6 +41,32 @@ class DownloadRepository(
         )
     }
 
+    suspend fun updateResumeMetadata(
+        downloadId: String,
+        supportsResume: Boolean,
+        etag: String?,
+        lastModified: String?,
+        totalBytes: Long,
+        updatedAt: Long = System.currentTimeMillis(),
+    ) = withContext(ioDispatcher) {
+        dao.updateDownloadResumeMetadata(
+            downloadId = downloadId,
+            supportsResume = supportsResume,
+            etag = etag,
+            lastModified = lastModified,
+            totalBytes = totalBytes,
+            updatedAt = updatedAt,
+        )
+    }
+
+    suspend fun updateDigest(
+        downloadId: String,
+        sha256: String,
+        updatedAt: Long = System.currentTimeMillis(),
+    ) = withContext(ioDispatcher) {
+        dao.updateDownloadDigest(downloadId, sha256, updatedAt)
+    }
+
     suspend fun delete(downloadId: String) =
         withContext(ioDispatcher) { dao.deleteDownload(downloadId) }
 }
