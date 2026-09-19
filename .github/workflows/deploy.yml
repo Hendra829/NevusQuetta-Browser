@@ -1,0 +1,70 @@
+name: Deploy Site
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build static site from README
+        run: |
+          mkdir -p site
+          python - <<'PY'
+          from html import escape
+          from pathlib import Path
+
+          readme = Path('README.md').read_text(encoding='utf-8')
+          html = f"""<!doctype html>
+          <html lang=\"en\">
+            <head>
+              <meta charset=\"utf-8\" />
+              <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+              <title>NevusQuetta Browser</title>
+              <style>
+                body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; line-height: 1.5; }}
+                pre {{ white-space: pre-wrap; background: #f6f8fa; padding: 1rem; border-radius: 8px; }}
+              </style>
+            </head>
+            <body>
+              <h1>NevusQuetta Browser</h1>
+              <p>Auto-generated deployment page.</p>
+              <pre>{escape(readme)}</pre>
+            </body>
+          </html>
+          """
+          Path('site/index.html').write_text(html, encoding='utf-8')
+          PY
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build-site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
