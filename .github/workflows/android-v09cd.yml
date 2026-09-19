@@ -64,16 +64,16 @@ jobs:
           fi
 
       - name: Clean
-        run: gradle --no-daemon clean
+        run: ./gradlew --no-daemon clean
 
       - name: Unit tests
-        run: gradle --no-daemon testDebugUnitTest
+        run: ./gradlew --no-daemon testDebugUnitTest
 
       - name: Lint
-        run: gradle --no-daemon lintDebug
+        run: ./gradlew --no-daemon lintDebug
 
       - name: Assemble debug APK
-        run: gradle --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleDebug
 
       - name: Verify and print Room schemas
         run: |
@@ -83,6 +83,11 @@ jobs:
           cat app/schemas/com.nevus.quetta.data.BrowserDatabase/1.json
           echo "===== ROOM_SCHEMA_V2 ====="
           cat app/schemas/com.nevus.quetta.data.BrowserDatabase/2.json
+
+      - name: Verify exported Room schema is reproducible
+        run: |
+          git diff --exit-code -- app/schemas/com.nevus.quetta.data.BrowserDatabase/2.json
+          echo "ROOM_SCHEMA_V2_REPRODUCIBLE=PASS"
 
       - name: Record checksum
         run: sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app-debug.apk.sha256
