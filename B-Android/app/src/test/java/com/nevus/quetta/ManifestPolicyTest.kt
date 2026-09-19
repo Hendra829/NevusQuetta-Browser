@@ -25,7 +25,7 @@ class ManifestPolicyTest {
 
     @Test
     fun `manifest uses Nevus application and exports only launcher`() {
-        assertEquals(NevusApplication::class.java.name, context.applicationInfo.className)
+        assertTrue(context is NevusApplication)
 
         val launcher = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
