@@ -340,4 +340,48 @@ class BrowserViewModelTest {
         assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
         assertEquals(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL), command.await())
     }
+
+    @Test
+    fun pageFailedStoresNonBlankErrorMessage() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        viewModel.onPageStarted("https://example.com")
+        runCurrent()
+        viewModel.onPageFailed(
+            url = "https://example.com",
+            canGoBack = false,
+            canGoForward = false,
+            description = "Network error",
+        )
+
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertEquals("Network error", viewModel.uiState.value.lastErrorMessage)
+    }
+
+    @Test
+    fun pageFailedDropsBlankErrorMessage() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        viewModel.onPageStarted("https://example.com")
+        runCurrent()
+        viewModel.onPageFailed(
+            url = "https://example.com",
+            canGoBack = false,
+            canGoForward = false,
+            description = "   ",
+        )
+
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertEquals(null, viewModel.uiState.value.lastErrorMessage)
+    }
 }

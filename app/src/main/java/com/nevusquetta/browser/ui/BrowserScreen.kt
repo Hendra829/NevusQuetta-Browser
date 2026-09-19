@@ -70,9 +70,15 @@ fun BrowserScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
             settings.javaScriptEnabled = true
+            settings.javaScriptCanOpenWindowsAutomatically = false
             settings.domStorageEnabled = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.loadsImagesAutomatically = true
+            settings.allowContentAccess = false
+            settings.allowFileAccess = false
+            settings.allowFileAccessFromFileURLs = false
+            settings.allowUniversalAccessFromFileURLs = false
+            settings.setSupportMultipleWindows(false)
             isVerticalScrollBarEnabled = true
             webViewClient = webViewClient
             webChromeClient = webChromeClient

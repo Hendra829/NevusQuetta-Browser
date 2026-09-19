@@ -8,7 +8,6 @@ import java.net.URISyntaxException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -18,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -36,9 +36,10 @@ class BrowserViewModel(
     private val progressDebounceMillis: Long = 50L,
     private val urlDebounceMillis: Long = 150L,
 ) : ViewModel() {
-    private var latestSubmissionToken: Long = 0
-    private var submitAddressJob: Job? = null
-
+    private val addressSubmissions = MutableSharedFlow<String>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
     private val progressEvents = MutableSharedFlow<Int>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -90,6 +91,16 @@ class BrowserViewModel(
                         }
                     }
                 }
+        }
+
+        viewModelScope.launch {
+            addressSubmissions.collectLatest { input ->
+                val normalizedUrl = withContext(urlNormalizationDispatcher) {
+                    normalizeUrl(input)
+                }
+                emitUrl(normalizedUrl)
+                _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
+            }
         }
     }
 
@@ -226,18 +237,7 @@ class BrowserViewModel(
                 progress = 0,
             )
         }
-        submitAddressJob?.cancel()
-        val submissionToken = ++latestSubmissionToken
-        submitAddressJob = viewModelScope.launch(urlNormalizationDispatcher) {
-            val normalizedUrl = normalizeUrl(input)
-            withContext(Dispatchers.Main.immediate) {
-                if (submissionToken != latestSubmissionToken) {
-                    return@withContext
-                }
-                emitUrl(normalizedUrl)
-                _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
-            }
-        }
+        addressSubmissions.tryEmit(input)
     }
 
     private fun updateNavigationState(
