@@ -21,7 +21,9 @@ class MainActivity : ComponentActivity() {
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     if (!browserViewModel.requestBackNavigation()) {
-                        finish()
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                        isEnabled = true
                     }
                 }
             },

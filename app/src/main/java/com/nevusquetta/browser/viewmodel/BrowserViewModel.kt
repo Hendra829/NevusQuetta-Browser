@@ -8,6 +8,7 @@ import java.net.URISyntaxException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,7 @@ class BrowserViewModel(
     private val progressDebounceMillis: Long = 50L,
     private val urlDebounceMillis: Long = 150L,
 ) : ViewModel() {
+    private var submitAddressJob: Job? = null
 
     private val progressEvents = MutableSharedFlow<Int>(
         extraBufferCapacity = 1,
@@ -172,7 +174,8 @@ class BrowserViewModel(
                 progress = 0,
             )
         }
-        viewModelScope.launch(urlNormalizationDispatcher) {
+        submitAddressJob?.cancel()
+        submitAddressJob = viewModelScope.launch(urlNormalizationDispatcher) {
             val normalizedUrl = normalizeUrl(input)
             emitUrl(normalizedUrl)
             _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
@@ -217,7 +220,8 @@ class BrowserViewModel(
             return BrowserUiState.DEFAULT_HOME_URL
         }
 
-        val candidate = if (SCHEME_PATTERN.matches(trimmed)) {
+        val hasScheme = SCHEME_PATTERN.matches(trimmed)
+        val candidate = if (hasScheme) {
             trimmed
         } else {
             "https://$trimmed"
@@ -225,7 +229,9 @@ class BrowserViewModel(
 
         return try {
             val uri = URI(candidate)
-            if (uri.host.isNullOrBlank()) {
+            if (hasScheme && !uri.scheme.isNullOrBlank()) {
+                uri.toString()
+            } else if (uri.host.isNullOrBlank()) {
                 BrowserUiState.DEFAULT_HOME_URL
             } else {
                 uri.toString()
@@ -236,7 +242,7 @@ class BrowserViewModel(
     }
 
     companion object {
-        private val SCHEME_PATTERN = Regex("^[a-zA-Z][a-zA-Z\\d+\\-.]*://.+")
+        private val SCHEME_PATTERN = Regex("^[a-zA-Z][a-zA-Z\\d+\\-.]*:.*")
     }
 }
 

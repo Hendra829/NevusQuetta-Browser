@@ -60,7 +60,7 @@ fun BrowserScreen(
         R.string.browser_loading_progress,
         uiState.progress,
     )
-    val webView = remember(context) {
+    val webView = remember(context, viewModel) {
         WebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,

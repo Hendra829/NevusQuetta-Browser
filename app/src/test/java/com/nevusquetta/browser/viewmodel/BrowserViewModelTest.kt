@@ -190,4 +190,47 @@ class BrowserViewModelTest {
         assertEquals(BrowserCommand.LoadUrl("http://example.com/path"), command.await())
         assertEquals("http://example.com/path", viewModel.uiState.value.currentUrl)
     }
+
+    @Test
+    fun nonHttpSchemeIsPreservedBeforeLoading() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("about:blank")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl("about:blank"), command.await())
+        assertEquals("about:blank", viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
+    fun latestSubmittedAddressWinsWhenRequestsOverlap() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("first.example")
+        viewModel.submitAddress("second.example")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl("https://second.example"), command.await())
+        assertEquals("https://second.example", viewModel.uiState.value.currentUrl)
+    }
 }
