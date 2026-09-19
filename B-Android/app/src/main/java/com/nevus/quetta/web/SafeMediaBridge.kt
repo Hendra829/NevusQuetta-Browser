@@ -5,7 +5,10 @@ import org.json.JSONObject
 import java.net.IDN
 import java.util.Locale
 
-data class MediaCandidate(val url: Uri)
+data class MediaCandidate(
+    val url: Uri,
+    val hint: String?,
+)
 
 sealed interface BridgeDecision {
     data class Accepted(val candidate: MediaCandidate) : BridgeDecision
@@ -14,6 +17,7 @@ sealed interface BridgeDecision {
 
 object SafeMediaBridge {
     const val MAX_PAYLOAD_BYTES = 16_384
+    private val allowedHints = setOf("hls", "dash", "video", "audio", "unknown")
 
     fun validate(topLevel: Uri, payload: String): BridgeDecision {
         if (origin(topLevel) == null) return BridgeDecision.Rejected("invalid-top-level-origin")
@@ -29,9 +33,17 @@ object SafeMediaBridge {
         if (url.isBlank()) return BridgeDecision.Rejected("missing-url")
         val candidate = runCatching { Uri.parse(url) }.getOrNull()
             ?: return BridgeDecision.Rejected("invalid-url")
-
         if (origin(candidate) == null) return BridgeDecision.Rejected("non-https-media")
-        return BridgeDecision.Accepted(MediaCandidate(candidate))
+
+        val rawHint = json.optString("hint").trim().lowercase(Locale.US)
+        val hint = rawHint.takeIf { it in allowedHints }
+
+        return BridgeDecision.Accepted(
+            MediaCandidate(
+                url = candidate,
+                hint = hint,
+            ),
+        )
     }
 
     fun sameOrigin(left: Uri, right: Uri): Boolean {
