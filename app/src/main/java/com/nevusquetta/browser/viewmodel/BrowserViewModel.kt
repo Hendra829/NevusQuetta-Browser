@@ -60,6 +60,9 @@ class BrowserViewModel(
                 .collect { progress ->
                     val safeProgress = progress.coerceIn(0, 100)
                     _uiState.update { current ->
+                        if (!current.isLoading && safeProgress < current.progress) {
+                            return@update current
+                        }
                         val nextLoading = if (safeProgress in 1..99) true else current.isLoading
                         current.copy(
                             isLoading = nextLoading,

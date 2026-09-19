@@ -105,4 +105,68 @@ class BrowserViewModelTest {
 
         assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
     }
+
+    @Test
+    fun plainHostGetsHttpsSchemeBeforeLoading() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("example.com")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl("https://example.com"), command.await())
+        assertEquals("https://example.com", viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
+    fun invalidAddressFallsBackToHomeUrlBeforeLoading() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        val command = async(Dispatchers.Main) { viewModel.commands.first() }
+        runCurrent()
+
+        viewModel.submitAddress("not a valid url")
+        runCurrent()
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertEquals(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL), command.await())
+        assertEquals(BrowserUiState.DEFAULT_HOME_URL, viewModel.uiState.value.currentUrl)
+    }
+
+    @Test
+    fun lateProgressDoesNotRegressCompletedPage() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        viewModel.onPageStarted("https://example.com")
+        runCurrent()
+        viewModel.onPageFinished("https://example.com", canGoBack = false, canGoForward = false)
+        runCurrent()
+
+        viewModel.onProgressChanged(35)
+        advanceTimeBy(10L)
+        runCurrent()
+
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertEquals(100, viewModel.uiState.value.progress)
+    }
 }

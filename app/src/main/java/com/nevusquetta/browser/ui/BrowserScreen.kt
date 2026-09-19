@@ -33,10 +33,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nevusquetta.browser.R
 import com.nevusquetta.browser.engine.NevusQuettaWebChromeClient
 import com.nevusquetta.browser.engine.NevusQuettaWebViewClient
 import com.nevusquetta.browser.viewmodel.BrowserCommand
@@ -142,6 +144,14 @@ private fun NavigationToolbar(
     onReloadStopClicked: () -> Unit,
     onHomeClicked: () -> Unit,
 ) {
+    val backDescription = stringResource(R.string.browser_back)
+    val forwardDescription = stringResource(R.string.browser_forward)
+    val stopDescription = stringResource(R.string.browser_stop_loading)
+    val reloadDescription = stringResource(R.string.browser_reload)
+    val homeDescription = stringResource(R.string.browser_home)
+    val addressLabel = stringResource(R.string.browser_address_label)
+    val addressPlaceholder = stringResource(R.string.browser_address_placeholder)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -158,7 +168,7 @@ private fun NavigationToolbar(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = backDescription,
                 )
             }
 
@@ -168,21 +178,21 @@ private fun NavigationToolbar(
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Forward",
+                    contentDescription = forwardDescription,
                 )
             }
 
             IconButton(onClick = onReloadStopClicked) {
                 Icon(
                     imageVector = if (isLoading) Icons.Filled.Close else Icons.Filled.Refresh,
-                    contentDescription = if (isLoading) "Stop loading" else "Reload",
+                    contentDescription = if (isLoading) stopDescription else reloadDescription,
                 )
             }
 
             IconButton(onClick = onHomeClicked) {
                 Icon(
                     imageVector = Icons.Filled.Home,
-                    contentDescription = "Home",
+                    contentDescription = homeDescription,
                 )
             }
         }
@@ -193,8 +203,8 @@ private fun NavigationToolbar(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium,
-            label = { Text("Address") },
-            placeholder = { Text("https://example.com") },
+            label = { Text(addressLabel) },
+            placeholder = { Text(addressPlaceholder) },
             keyboardOptions = KeyboardOptions(
                 imeAction = ImeAction.Go,
             ),

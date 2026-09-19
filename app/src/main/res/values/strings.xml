@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">NevusQuetta Browser</string>
+    <string name="browser_back">Back</string>
+    <string name="browser_forward">Forward</string>
+    <string name="browser_stop_loading">Stop loading</string>
+    <string name="browser_reload">Reload</string>
+    <string name="browser_home">Home</string>
+    <string name="browser_address_label">Address</string>
+    <string name="browser_address_placeholder">https://example.com</string>
 </resources>
