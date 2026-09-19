@@ -1,22 +1,15 @@
 package com.nevus.quetta.download
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.MediaStore
-import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import com.nevus.quetta.MainActivity
-import com.nevus.quetta.R
 import com.nevus.quetta.data.BrowserDatabase
 import com.nevus.quetta.data.DownloadStatuses
 import java.io.File
@@ -343,34 +336,14 @@ class ResumableDownloadWorker(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun createForegroundInfo(text: String): ForegroundInfo {
-        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "NevusQuetta Downloads",
-                    NotificationManager.IMPORTANCE_LOW,
-                ),
-            )
-        }
-        val intent = Intent(applicationContext, MainActivity::class.java)
-        val pending = PendingIntent.getActivity(
-            applicationContext,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    private fun createForegroundInfo(text: String): ForegroundInfo =
+        DownloadForegroundInfoFactory.create(
+            context = applicationContext,
+            notificationId = 4200 + id.hashCode().and(0x0fff),
+            channelId = "nevus_downloads",
+            channelName = "NevusQuetta Downloads",
+            text = text,
         )
-        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(applicationContext.getString(R.string.app_name))
-            .setContentText(text)
-            .setOnlyAlertOnce(true)
-            .setOngoing(true)
-            .setContentIntent(pending)
-            .build()
-        return ForegroundInfo(NOTIFICATION_ID_BASE + id.hashCode().and(0x0fff), notification)
-    }
 
     private suspend fun fail(downloadId: String, code: String): Result {
         repository.updateProgress(
@@ -406,8 +379,6 @@ class ResumableDownloadWorker(
         private const val STORAGE_RESERVE_BYTES = 64L * 1024L * 1024L
         private const val MAX_DIRECT_BYTES = 16L * 1024L * 1024L * 1024L
         private const val HTTP_RANGE_NOT_SATISFIABLE = 416
-        private const val CHANNEL_ID = "nevus_downloads"
-        private const val NOTIFICATION_ID_BASE = 4200
 
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
     }
