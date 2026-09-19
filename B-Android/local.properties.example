@@ -1,0 +1,3 @@
+# Salin ke local.properties (jangan commit).
+sdk.dir=/path/to/Android/Sdk
+# ndk.dir=/path/to/Android/Sdk/ndk/27.2.12479018

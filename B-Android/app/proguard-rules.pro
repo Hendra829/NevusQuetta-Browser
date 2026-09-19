@@ -1,0 +1,1 @@
+-keepclassmembers class com.nevus.quetta.BrowserBridge { @android.webkit.JavascriptInterface <methods>; }
