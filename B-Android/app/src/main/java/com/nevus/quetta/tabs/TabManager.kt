@@ -19,6 +19,8 @@ class TabManager(
     private val mutableState = MutableStateFlow(TabState(listOf(initial), initial.id))
     val state: StateFlow<TabState> = mutableState.asStateFlow()
 
+    fun tab(id: String): BrowserTab? = mutableState.value.tabs.firstOrNull { it.id == id }
+
     @Synchronized
     fun newTab(url: String = homeUrl, isPrivate: Boolean = false): BrowserTab? {
         val current = mutableState.value
@@ -90,6 +92,18 @@ class TabManager(
     }
 
     @Synchronized
+    fun reset(url: String = homeUrl) {
+        val tab = BrowserTab(
+            id = idFactory(),
+            url = url,
+            title = "",
+            isPrivate = false,
+            lastAccessedAt = clock(),
+        )
+        mutableState.value = TabState(listOf(tab), tab.id)
+    }
+
+    @Synchronized
     fun restore(persisted: List<BrowserTab>, preferredActiveId: String? = null) {
         val sanitized = persisted
             .asSequence()
@@ -100,8 +114,7 @@ class TabManager(
             .toList()
 
         if (sanitized.isEmpty()) {
-            val home = newHomeTab()
-            mutableState.value = TabState(listOf(home), home.id)
+            reset()
             return
         }
 
