@@ -38,6 +38,7 @@ class BrowserViewModel(
     private val progressDebounceMillis: Long = 50L,
     private val urlDebounceMillis: Long = 150L,
 ) : ViewModel() {
+    private var hasStartedInitialNavigation = false
     private val addressSubmissions = MutableSharedFlow<String>(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -101,6 +102,16 @@ class BrowserViewModel(
             }
         }
 
+    }
+
+    /**
+     * Memulai load awal setelah collector command aktif agar navigasi pertama tidak hilang.
+     */
+    fun onCommandConsumerReady() {
+        if (hasStartedInitialNavigation) {
+            return
+        }
+        hasStartedInitialNavigation = true
         startNavigation(BrowserUiState.DEFAULT_HOME_URL)
     }
 
@@ -314,7 +325,9 @@ class BrowserViewModel(
         return try {
             val url = URL(candidate)
             val uri = url.toURI().normalize()
-            val host = uri.host?.takeIf(String::isNotBlank)?.let(IDN::toASCII)
+            val host = uri.host?.takeIf(String::isNotBlank)?.let {
+                IDN.toASCII(it, IDN.USE_STD3_ASCII_RULES)
+            }
                 ?: return BrowserUiState.DEFAULT_HOME_URL
             if (!uri.userInfo.isNullOrBlank()) {
                 return BrowserUiState.DEFAULT_HOME_URL

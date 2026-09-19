@@ -390,4 +390,23 @@ class BrowserViewModelTest {
         assertFalse(viewModel.uiState.value.isLoading)
         assertEquals(null, viewModel.uiState.value.lastErrorMessage)
     }
+
+    @Test
+    fun pageFailedPreservesNonBlankWhitespaceInErrorMessage() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val viewModel = BrowserViewModel(
+            urlNormalizationDispatcher = dispatcher,
+            progressDebounceMillis = 10L,
+            urlDebounceMillis = 10L,
+        )
+
+        viewModel.onPageFailed(
+            url = "https://example.com",
+            canGoBack = false,
+            canGoForward = false,
+            description = "  Network error  ",
+        )
+
+        assertEquals("  Network error  ", viewModel.uiState.value.lastErrorMessage)
+    }
 }

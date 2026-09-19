@@ -1,6 +1,9 @@
 package com.nevusquetta.browser.engine
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -59,6 +62,12 @@ class NevusQuettaWebViewClient(
             return false
         }
 
+        if (url.scheme?.lowercase() in EXTERNAL_SCHEMES) {
+            if (launchExternalIntent(view, url)) {
+                return true
+            }
+        }
+
         viewModel.onPageFailed(
             url = url.toString(),
             canGoBack = view?.canGoBack() == true,
@@ -108,7 +117,33 @@ class NevusQuettaWebViewClient(
         }
     }
 
+    private fun launchExternalIntent(view: WebView?, uri: Uri): Boolean {
+        val context = view?.context ?: return false
+        val intent = try {
+            if (uri.scheme.equals("intent", ignoreCase = true)) {
+                Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
+            } else {
+                Intent(Intent.ACTION_VIEW, uri)
+            }
+        } catch (_: Exception) {
+            return false
+        }
+
+        val packageManager = context.packageManager
+        if (intent.resolveActivity(packageManager) == null) {
+            return false
+        }
+
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            false
+        }
+    }
+
     companion object {
         private val ALLOWED_SCHEMES = setOf("about", "http", "https")
+        private val EXTERNAL_SCHEMES = setOf("intent", "mailto", "tel")
     }
 }

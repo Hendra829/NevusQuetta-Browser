@@ -114,6 +114,10 @@ fun BrowserScreen(
         }
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.onCommandConsumerReady()
+    }
+
     DisposableEffect(webView) {
         isWebViewDisposed = false
         onDispose {
