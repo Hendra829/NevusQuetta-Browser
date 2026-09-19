@@ -14,7 +14,8 @@ android {
         targetSdk = 36
         versionCode = 900
         versionName = "0.9.0-ab"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild {
             cmake {
                 cppFlags += listOf("-std=c++17", "-O2", "-fno-exceptions")
@@ -70,6 +71,7 @@ android {
     packaging { jniLibs { useLegacyPackaging = false } }
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        animationsDisabled = true
     }
 }
 
@@ -96,4 +98,11 @@ dependencies {
     testImplementation("androidx.room:room-testing:2.7.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
+
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
