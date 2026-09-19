@@ -1,22 +1,27 @@
 package com.nevus.quetta.download
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.provider.MediaStore
-import android.webkit.CookieManager
+import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
+import com.nevus.quetta.MainActivity
+import com.nevus.quetta.R
 import com.nevus.quetta.data.BrowserDatabase
 import com.nevus.quetta.data.DownloadStatuses
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import javax.net.ssl.HttpsURLConnection
@@ -31,13 +36,20 @@ class HlsVodDownloadWorker(
 ) : CoroutineWorker(appContext, params) {
     private val repository = DownloadRepository(BrowserDatabase.get(appContext))
     private val parser = HlsVodParser()
-    private val secretStore = DownloadSecretStore(appContext)
+    private val secrets = DownloadSecretStore(appContext)
+
+    override suspend fun getForegroundInfo(): ForegroundInfo =
+        createForegroundInfo("Menyiapkan HLS")
 
     override suspend fun doWork(): Result {
         val downloadId = inputData.getString(KEY_DOWNLOAD_ID)
             ?: return Result.failure()
-        val secret = secretStore.get(downloadId)
-            ?: return failMissingSecret(downloadId)
+        val item = repository.get(downloadId)
+            ?: return Result.failure()
+        val secret = secrets.get(downloadId)
+            ?: return fail(downloadId, "HLS_SECRET_MISSING")
+
+        setForeground(createForegroundInfo(item.fileName))
 
         repository.updateProgress(
             downloadId = downloadId,
@@ -48,7 +60,7 @@ class HlsVodDownloadWorker(
             errorCode = null,
         )
 
-        val tempDir = File(applicationContext.cacheDir, "nevus_hls")
+        val tempDir = File(applicationContext.cacheDir, TEMP_DIR)
         val tempFile = File(tempDir, downloadId + ".part")
 
         return try {
@@ -56,32 +68,22 @@ class HlsVodDownloadWorker(
                 tempDir.mkdirs()
                 tempFile.delete()
 
-                val media = resolveMediaPlaylist(downloadId, secret)
-                if (media.initSegment != null && media.hasDiscontinuity) {
-                    error("DISCONTINUITY_FMP4_UNSUPPORTED")
-                }
-
+                val media = resolveMediaPlaylist(secret)
                 val parts = buildList {
-                    media.initSegment?.let { add(HlsSegment(it, false)) }
+                    media.initSegment?.let(::add)
                     addAll(media.segments)
                 }
 
                 var downloaded = 0L
-                var firstContentType: String? = null
                 FileOutputStream(tempFile).use { output ->
-                    parts.forEachIndexed { index, part ->
+                    parts.forEachIndexed { index, partUrl ->
                         if (isStopped) throw CancellationException("HLS worker stopped")
-                        val copy = appendHttps(
-                            downloadId = downloadId,
-                            url = part.url,
+                        downloaded += appendHttps(
+                            url = partUrl,
                             secret = secret,
                             output = output,
                             alreadyDownloaded = downloaded,
                         )
-                        downloaded += copy.bytes
-                        if (firstContentType == null && copy.contentType != null) {
-                            firstContentType = copy.contentType
-                        }
                         repository.updateProgress(
                             downloadId = downloadId,
                             status = DownloadStatuses.RUNNING,
@@ -91,23 +93,22 @@ class HlsVodDownloadWorker(
                             errorCode = null,
                         )
                         setProgress(
-                            workDataOf(
+                            androidx.work.workDataOf(
                                 "segmentsDone" to (index + 1),
                                 "segmentsTotal" to parts.size,
                                 "bytesDownloaded" to downloaded,
-                                "gapSegmentsSkipped" to media.gapCount,
-                                "hasDiscontinuity" to media.hasDiscontinuity,
+                                "gapsSkipped" to media.skippedGapSegments,
                             ),
                         )
                     }
+                    output.fd.sync()
                 }
 
-                val output = outputFormat(media, firstContentType)
-                val fileName = DownloadPolicy.sanitizeFileName(
-                    baseName(secret.url) + "-hls." + output.extension,
-                )
+                val extension = if (media.initSegment != null) "mp4" else "ts"
+                val fileName = withExtension(item.fileName, extension)
+                val mime = if (extension == "mp4") "video/mp4" else "video/mp2t"
                 val digest = sha256(tempFile)
-                val localUri = publishVerified(tempFile, fileName, output.mimeType)
+                val localUri = publishVerified(tempFile, fileName, mime)
 
                 repository.updateDigest(downloadId, digest)
                 repository.updateProgress(
@@ -118,29 +119,29 @@ class HlsVodDownloadWorker(
                     localUri = localUri,
                     errorCode = null,
                 )
-                secretStore.remove(downloadId)
+                secrets.remove(downloadId)
             }
             Result.success()
         } catch (cancel: CancellationException) {
             withContext(NonCancellable) {
-                val item = repository.get(downloadId)
+                val current = repository.get(downloadId)
                 repository.updateProgress(
                     downloadId = downloadId,
                     status = DownloadStatuses.CANCELED,
-                    bytesDownloaded = item?.bytesDownloaded ?: 0,
-                    totalBytes = item?.totalBytes ?: -1,
-                    localUri = item?.localUri,
+                    bytesDownloaded = current?.bytesDownloaded ?: 0,
+                    totalBytes = current?.totalBytes ?: -1,
+                    localUri = current?.localUri,
                     errorCode = null,
                 )
             }
             throw cancel
         } catch (error: Throwable) {
-            val item = repository.get(downloadId)
+            val current = repository.get(downloadId)
             repository.updateProgress(
                 downloadId = downloadId,
                 status = DownloadStatuses.FAILED,
-                bytesDownloaded = item?.bytesDownloaded ?: 0,
-                totalBytes = item?.totalBytes ?: -1,
+                bytesDownloaded = current?.bytesDownloaded ?: 0,
+                totalBytes = current?.totalBytes ?: -1,
                 localUri = null,
                 errorCode = sanitizeError(error),
             )
@@ -153,58 +154,30 @@ class HlsVodDownloadWorker(
         }
     }
 
-    private suspend fun failMissingSecret(downloadId: String): Result {
-        repository.updateProgress(
-            downloadId = downloadId,
-            status = DownloadStatuses.FAILED,
-            bytesDownloaded = 0,
-            totalBytes = -1,
-            localUri = null,
-            errorCode = "HLS_SECRET_MISSING",
-        )
-        return Result.failure()
-    }
-
-    private fun resolveMediaPlaylist(
-        downloadId: String,
-        secret: DownloadSecret,
-    ): HlsParseResult.Media {
+    private fun resolveMediaPlaylist(secret: DownloadSecret): HlsParseResult.Media {
         var current = secret.url
         repeat(MAX_MASTER_DEPTH) {
-            val body = fetchText(downloadId, current, secret)
+            val body = fetchText(current, secret)
             when (val parsed = parser.parse(current, body)) {
                 is HlsParseResult.Media -> return parsed
                 is HlsParseResult.Master -> {
-                    val selected = parsed.variants
-                        .maxByOrNull { variant -> variant.bandwidth ?: 0L }
-                        ?: error("MASTER_WITHOUT_VARIANT")
-                    val externalAudio = selected.audioGroup?.let { group ->
-                        parsed.audioRenditions.firstOrNull {
-                            rendition -> rendition.groupId == group && rendition.url != null
-                        }
+                    current = when (val selected = parser.selectVariant(parsed)) {
+                        is HlsVariantSelection.Selected -> selected.variant.url
+                        is HlsVariantSelection.Rejected -> error(selected.reason)
                     }
-                    if (externalAudio != null) {
-                        error("EXTERNAL_AUDIO_RENDITION_REQUIRES_MUXER")
-                    }
-                    current = selected.url
                 }
                 is HlsParseResult.Rejected -> error(parsed.reason)
             }
         }
-        error("MASTER_DEPTH_EXCEEDED")
+        error("Master playlist terlalu dalam")
     }
 
-    private fun fetchText(
-        downloadId: String,
-        url: String,
-        secret: DownloadSecret,
-    ): String {
-        val opened = openFollowingRedirects(downloadId, url, secret)
-        val connection = opened.connection
+    private fun fetchText(url: String, secret: DownloadSecret): String {
+        val response = openValidated(url, secret)
+        val connection = response.connection
         try {
             val code = connection.responseCode
-            if (code !in 200..299) error("HTTP_" + code)
-            captureSetCookies(opened.finalUri, connection)
+            if (code !in 200..299) error("HLS_HTTP_" + code)
             val output = ByteArrayOutputStream()
             connection.inputStream.use { input ->
                 val buffer = ByteArray(16 * 1024)
@@ -213,7 +186,7 @@ class HlsVodDownloadWorker(
                     val read = input.read(buffer)
                     if (read < 0) break
                     total += read
-                    if (total > MAX_MANIFEST_BYTES) error("MANIFEST_TOO_LARGE")
+                    if (total > MAX_MANIFEST_BYTES) error("HLS_MANIFEST_TOO_LARGE")
                     output.write(buffer, 0, read)
                 }
             }
@@ -224,20 +197,19 @@ class HlsVodDownloadWorker(
     }
 
     private fun appendHttps(
-        downloadId: String,
         url: String,
         secret: DownloadSecret,
         output: FileOutputStream,
         alreadyDownloaded: Long,
-    ): SegmentCopy {
-        val opened = openFollowingRedirects(downloadId, url, secret)
-        val connection = opened.connection
+    ): Long {
+        val response = openValidated(url, secret)
+        val connection = response.connection
         try {
             val code = connection.responseCode
-            if (code !in 200..299) error("SEGMENT_HTTP_" + code)
-            captureSetCookies(opened.finalUri, connection)
+            if (code !in 200..299) error("HLS_SEGMENT_HTTP_" + code)
             val expected = connection.contentLengthLong
             if (expected > 0) ensureStorage(expected)
+
             var copied = 0L
             connection.inputStream.use { input ->
                 val buffer = ByteArray(64 * 1024)
@@ -247,93 +219,64 @@ class HlsVodDownloadWorker(
                     if (read < 0) break
                     copied += read
                     if (alreadyDownloaded + copied > MAX_HLS_BYTES) {
-                        error("HLS_SIZE_LIMIT")
+                        error("HLS_TOO_LARGE")
                     }
                     output.write(buffer, 0, read)
                 }
             }
-            return SegmentCopy(
-                bytes = copied,
-                contentType = connection.contentType
-                    ?.substringBefore(';')
-                    ?.trim()
-                    ?.lowercase(),
-            )
+            if (expected > 0 && copied != expected) error("HLS_SEGMENT_LENGTH_MISMATCH")
+            return copied
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun openFollowingRedirects(
-        downloadId: String,
+    private fun openValidated(
         rawUrl: String,
         secret: DownloadSecret,
-    ): OpenedConnection {
+    ): Response {
+        val manifestOrigin = DownloadPolicy.validateHttps(secret.url)
+            ?: error("INVALID_HLS_ORIGIN")
         var current = DownloadPolicy.validateHttps(rawUrl)
-            ?: error("INVALID_HTTPS_URL")
+            ?: error("INVALID_HLS_URL")
 
-        repeat(MAX_REDIRECTS + 1) { redirectCount ->
-            if (!DownloadPolicy.resolvesToPublicAddress(current)) {
-                error("NON_PUBLIC_TARGET")
-            }
-
+        repeat(MAX_REDIRECTS + 1) { redirect ->
+            if (!DownloadPolicy.resolvesToPublicAddress(current)) error("HLS_NON_PUBLIC_TARGET")
             val connection = URL(current.toString()).openConnection()
             require(connection is HttpsURLConnection)
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 30_000
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = READ_TIMEOUT_MS
             connection.instanceFollowRedirects = false
             connection.useCaches = false
             secret.userAgent?.takeIf(String::isNotBlank)
                 ?.let { connection.setRequestProperty("User-Agent", it) }
             DownloadPolicy.safeReferrer(secret.sourcePage, current)
                 ?.let { connection.setRequestProperty("Referer", it) }
-
-            if (DownloadPolicy.safeCookieTarget(secret.sourcePage, current)) {
-                val jarCookie = CookieManager.getInstance().getCookie(current.toString())
-                (jarCookie ?: secret.cookie)
-                    ?.takeIf(String::isNotBlank)
-                    ?.let { connection.setRequestProperty("Cookie", it) }
+            if (secret.cookie != null && DownloadPolicy.sameOrigin(manifestOrigin, current)) {
+                connection.setRequestProperty("Cookie", secret.cookie)
             }
 
             val code = connection.responseCode
-            if (code !in REDIRECT_CODES) {
-                return OpenedConnection(connection, current)
-            }
-
-            captureSetCookies(current, connection)
-            if (redirectCount >= MAX_REDIRECTS) {
+            if (code in REDIRECT_CODES) {
+                if (redirect >= MAX_REDIRECTS) {
+                    connection.disconnect()
+                    error("HLS_TOO_MANY_REDIRECTS")
+                }
+                val next = connection.getHeaderField("Location")
+                    ?.let { DownloadPolicy.resolveRedirect(current, it) }
                 connection.disconnect()
-                error("REDIRECT_LIMIT")
+                current = next ?: error("HLS_INVALID_REDIRECT")
+                return@repeat
             }
-            val location = connection.getHeaderField("Location")
-            connection.disconnect()
-            current = DownloadPolicy.resolveRedirect(current, location ?: "")
-                ?: error("UNSAFE_REDIRECT")
+            return Response(current, connection)
         }
-
-        error("REDIRECT_LOOP_" + downloadId.take(8))
-    }
-
-    private fun captureSetCookies(
-        uri: Uri,
-        connection: HttpsURLConnection,
-    ) {
-        val headers = connection.headerFields
-            .filterKeys { key -> key?.equals("Set-Cookie", ignoreCase = true) == true }
-            .values
-            .flatten()
-        if (headers.isEmpty()) return
-        val manager = CookieManager.getInstance()
-        headers.forEach { value ->
-            if (value.isNotBlank()) manager.setCookie(uri.toString(), value)
-        }
-        manager.flush()
+        error("HLS_REDIRECT_RESOLUTION_FAILED")
     }
 
     private fun ensureStorage(nextBytes: Long) {
         val available = StatFs(applicationContext.cacheDir.absolutePath).availableBytes
         if (available < nextBytes + STORAGE_RESERVE_BYTES) {
-            error("TEMP_STORAGE_LOW")
+            error("HLS_INSUFFICIENT_STORAGE")
         }
     }
 
@@ -342,6 +285,7 @@ class HlsVodDownloadWorker(
         fileName: String,
         mimeType: String,
     ): String {
+        if (!source.exists() || source.length() <= 0L) error("HLS_EMPTY_OUTPUT")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -356,11 +300,11 @@ class HlsVodDownloadWorker(
             val uri = resolver.insert(
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 values,
-            ) ?: error("MEDIASTORE_INSERT_FAILED")
+            ) ?: error("HLS_MEDIASTORE_INSERT_FAILED")
             try {
                 resolver.openOutputStream(uri, "w")?.use { target ->
                     source.inputStream().use { input -> input.copyTo(target) }
-                } ?: error("MEDIASTORE_OPEN_FAILED")
+                } ?: error("HLS_MEDIASTORE_OPEN_FAILED")
                 values.clear()
                 values.put(MediaStore.Downloads.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
@@ -382,26 +326,6 @@ class HlsVodDownloadWorker(
         return Uri.fromFile(target).toString()
     }
 
-    private fun outputFormat(
-        media: HlsParseResult.Media,
-        contentType: String?,
-    ): OutputFormat {
-        if (media.initSegment != null) return OutputFormat("mp4", "video/mp4")
-        return when (contentType) {
-            "audio/aac", "audio/aacp" -> OutputFormat("aac", "audio/aac")
-            "audio/mpeg" -> OutputFormat("mp3", "audio/mpeg")
-            "audio/mp4", "audio/x-m4a" -> OutputFormat("m4a", "audio/mp4")
-            "video/mp4" -> OutputFormat("mp4", "video/mp4")
-            "video/mp2t", "application/mp2t" -> OutputFormat("ts", "video/mp2t")
-            else -> OutputFormat("ts", "video/mp2t")
-        }
-    }
-
-    private fun baseName(url: String): String {
-        val segment = Uri.parse(url).lastPathSegment.orEmpty()
-        return segment.substringBeforeLast('.').ifBlank { "video" }
-    }
-
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
@@ -412,45 +336,81 @@ class HlsVodDownloadWorker(
                 digest.update(buffer, 0, read)
             }
         }
-        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun withExtension(base: String, extension: String): String {
+        val clean = DownloadPolicy.sanitizeFileName(base)
+        val withoutKnown = clean.removeSuffix(".m3u8")
+            .removeSuffix(".mp4")
+            .removeSuffix(".ts")
+        return DownloadPolicy.sanitizeFileName("$withoutKnown.$extension")
+    }
+
+    private fun createForegroundInfo(text: String): ForegroundInfo {
+        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "NevusQuetta HLS",
+                    NotificationManager.IMPORTANCE_LOW,
+                ),
+            )
+        }
+        val pending = PendingIntent.getActivity(
+            applicationContext,
+            0,
+            Intent(applicationContext, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(applicationContext.getString(R.string.app_name))
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setContentIntent(pending)
+            .build()
+        return ForegroundInfo(NOTIFICATION_ID_BASE + id.hashCode().and(0x0fff), notification)
+    }
+
+    private suspend fun fail(downloadId: String, code: String): Result {
+        repository.updateProgress(
+            downloadId = downloadId,
+            status = DownloadStatuses.FAILED,
+            bytesDownloaded = 0,
+            totalBytes = -1,
+            localUri = null,
+            errorCode = code,
+        )
+        return Result.failure()
     }
 
     private fun sanitizeError(error: Throwable): String =
-        error.message
-            ?.replace(Regex("https://[^\\s]+"), "[url]")
-            ?.replace(Regex("(?i)(token|key|sig|signature|auth)=([^&\\s]+)"), "$1=[redacted]")
-            ?.take(160)
-            ?: error::class.java.simpleName.take(80)
+        (error.message ?: error::class.java.simpleName)
+            .replace(Regex("""https://[^\s]+"""), "[url]")
+            .take(160)
 
-    private data class SegmentCopy(
-        val bytes: Long,
-        val contentType: String?,
-    )
-
-    private data class OpenedConnection(
-        val connection: HttpsURLConnection,
+    private data class Response(
         val finalUri: Uri,
-    )
-
-    private data class OutputFormat(
-        val extension: String,
-        val mimeType: String,
+        val connection: HttpsURLConnection,
     )
 
     companion object {
         const val KEY_DOWNLOAD_ID = "downloadId"
 
+        private const val TEMP_DIR = "nevus_hls"
         private const val MAX_MASTER_DEPTH = 4
-        private const val MAX_REDIRECTS = 5
         private const val MAX_MANIFEST_BYTES = 1024 * 1024
-        private const val MAX_HLS_BYTES = 8L * 1024L * 1024L * 1024L
-        private const val STORAGE_RESERVE_BYTES = 32L * 1024L * 1024L
-        private val REDIRECT_CODES = setOf(
-            HttpURLConnection.HTTP_MOVED_PERM,
-            HttpURLConnection.HTTP_MOVED_TEMP,
-            HttpURLConnection.HTTP_SEE_OTHER,
-            307,
-            308,
-        )
+        private const val MAX_HLS_BYTES = 16L * 1024L * 1024L * 1024L
+        private const val STORAGE_RESERVE_BYTES = 64L * 1024L * 1024L
+        private const val MAX_REDIRECTS = 5
+        private const val CONNECT_TIMEOUT_MS = 15_000
+        private const val READ_TIMEOUT_MS = 45_000
+        private const val CHANNEL_ID = "nevus_hls_downloads"
+        private const val NOTIFICATION_ID_BASE = 5200
+
+        private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
     }
 }
