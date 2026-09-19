@@ -68,6 +68,40 @@ interface BrowserDao {
         updatedAt: Long,
     )
 
+    @Query(
+        """
+        UPDATE downloads
+        SET supportsResume = :supportsResume,
+            etag = :etag,
+            lastModified = :lastModified,
+            totalBytes = :totalBytes,
+            updatedAt = :updatedAt
+        WHERE downloadId = :downloadId
+        """,
+    )
+    suspend fun updateDownloadResumeMetadata(
+        downloadId: String,
+        supportsResume: Boolean,
+        etag: String?,
+        lastModified: String?,
+        totalBytes: Long,
+        updatedAt: Long,
+    )
+
+    @Query(
+        """
+        UPDATE downloads
+        SET sha256 = :sha256,
+            updatedAt = :updatedAt
+        WHERE downloadId = :downloadId
+        """,
+    )
+    suspend fun updateDownloadDigest(
+        downloadId: String,
+        sha256: String,
+        updatedAt: Long,
+    )
+
     @Query("DELETE FROM downloads WHERE downloadId = :downloadId")
     suspend fun deleteDownload(downloadId: String)
 
