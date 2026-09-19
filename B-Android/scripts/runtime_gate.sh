@@ -42,6 +42,8 @@ pass "APK + androidTest installed"
 
 run_class "com.nevus.quetta.runtime.RuntimeUiTest"
 run_class "com.nevus.quetta.runtime.DownloadRuntimeTest"
+run_class "com.nevus.quetta.runtime.BrowserDatabaseMigrationRuntimeTest"
+run_class "com.nevus.quetta.runtime.V09CRuntimeTest"
 run_class "com.nevus.quetta.runtime.PersistenceSeedTest"
 
 adb shell am force-stop "$PKG"
