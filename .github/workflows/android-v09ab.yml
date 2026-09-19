@@ -36,11 +36,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android packages
         run: |
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | sdkmanager --licenses >/dev/null
           sdkmanager \
             "platform-tools" \
@@ -99,4 +97,3 @@ jobs:
             B-Android/app-debug.apk.sha256
             B-Android/app/build/reports/
             B-Android/app/build/test-results/
-
