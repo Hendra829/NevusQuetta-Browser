@@ -18,10 +18,10 @@ import java.util.concurrent.TimeUnit
 class HlsDownloadCoordinator(
     context: Context,
     private val repository: DownloadRepository,
-    private val secretStore: DownloadSecretStore = DownloadSecretStore(context),
 ) {
     private val appContext = context.applicationContext
     private val workManager = WorkManager.getInstance(appContext)
+    private val secrets = DownloadSecretStore(appContext)
 
     suspend fun enqueue(
         manifestUrl: String,
@@ -31,7 +31,9 @@ class HlsDownloadCoordinator(
         val uri = DownloadPolicy.validateHttps(manifestUrl)
             ?: return ManagedDownloadResult.Rejected("Manifest HLS harus HTTPS valid")
         if (!DownloadPolicy.resolvesToPublicAddress(uri)) {
-            return ManagedDownloadResult.Rejected("Tujuan HLS bukan jaringan publik yang diizinkan")
+            return ManagedDownloadResult.Rejected(
+                "Tujuan HLS bukan alamat jaringan publik yang diizinkan",
+            )
         }
 
         val downloadId = UUID.randomUUID().toString()
@@ -40,62 +42,64 @@ class HlsDownloadCoordinator(
             ?.takeIf(String::isNotBlank)
             ?: "video"
         val fileName = DownloadPolicy.sanitizeFileName(base + "-hls")
+
         val cookie = if (DownloadPolicy.safeCookieTarget(sourcePage, uri)) {
             CookieManager.getInstance().getCookie(uri.toString())
         } else {
             null
         }
-
-        if (!secretStore.put(
-                downloadId,
-                DownloadSecret(
-                    url = uri.toString(),
-                    userAgent = userAgent,
-                    cookie = cookie,
-                    sourcePage = sourcePage,
-                ),
-            )
-        ) {
-            return ManagedDownloadResult.Failed("Metadata rahasia HLS tidak dapat diamankan")
+        val secret = DownloadSecret(
+            url = uri.toString(),
+            userAgent = userAgent,
+            cookie = cookie,
+            sourcePage = sourcePage,
+        )
+        if (!secrets.put(downloadId, secret)) {
+            return ManagedDownloadResult.Failed("Gagal menyimpan konteks HLS terenkripsi")
         }
 
         val now = System.currentTimeMillis()
-        repository.upsert(
-            DownloadEntity(
+        return runCatching {
+            repository.upsert(
+                DownloadEntity(
+                    downloadId = downloadId,
+                    systemDownloadId = null,
+                    url = DownloadPolicy.redactedForStorage(uri),
+                    sourceOrigin = sourcePage
+                        ?.let(DownloadPolicy::validateHttps)
+                        ?.let(DownloadPolicy::originOnly),
+                    fileName = fileName,
+                    mimeType = "application/vnd.apple.mpegurl",
+                    kind = DownloadKinds.HLS_VOD,
+                    status = DownloadStatuses.QUEUED,
+                    bytesDownloaded = 0,
+                    totalBytes = -1,
+                    supportsResume = false,
+                    etag = null,
+                    lastModified = null,
+                    sha256 = null,
+                    localUri = null,
+                    errorCode = null,
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            )
+            enqueueWork(downloadId)
+            ManagedDownloadResult.Enqueued(
                 downloadId = downloadId,
-                systemDownloadId = null,
-                url = DownloadPolicy.redactedForStorage(uri),
-                sourceOrigin = sourcePage
-                    ?.let(DownloadPolicy::validateHttps)
-                    ?.let(DownloadPolicy::originOnly),
+                systemId = -1,
                 fileName = fileName,
-                mimeType = "application/vnd.apple.mpegurl",
-                kind = DownloadKinds.HLS_VOD,
-                status = DownloadStatuses.QUEUED,
-                bytesDownloaded = 0,
-                totalBytes = -1,
                 supportsResume = false,
-                etag = null,
-                lastModified = null,
-                sha256 = null,
-                localUri = null,
-                errorCode = null,
-                createdAt = now,
-                updatedAt = now,
-            ),
-        )
-        enqueueWork(downloadId)
-        return ManagedDownloadResult.Enqueued(
-            downloadId = downloadId,
-            systemId = -1,
-            fileName = fileName,
-            supportsResume = false,
-        )
+            )
+        }.getOrElse { error ->
+            secrets.remove(downloadId)
+            ManagedDownloadResult.Failed(error.message ?: "Gagal membuat antrean HLS")
+        }
     }
 
     suspend fun cancel(downloadId: String): Boolean {
         val item = repository.get(downloadId) ?: return false
-        workManager.cancelUniqueWork(workName(downloadId))
+        if (item.kind != DownloadKinds.HLS_VOD) return false
         repository.updateProgress(
             downloadId = downloadId,
             status = DownloadStatuses.CANCELED,
@@ -104,6 +108,7 @@ class HlsDownloadCoordinator(
             localUri = item.localUri,
             errorCode = null,
         )
+        workManager.cancelUniqueWork(workName(downloadId))
         return true
     }
 
@@ -113,13 +118,17 @@ class HlsDownloadCoordinator(
         if (item.kind != DownloadKinds.HLS_VOD) {
             return ManagedDownloadResult.Rejected("Bukan pekerjaan HLS")
         }
-        if (item.status != DownloadStatuses.FAILED &&
-            item.status != DownloadStatuses.CANCELED
+        if (item.status !in setOf(
+                DownloadStatuses.FAILED,
+                DownloadStatuses.CANCELED,
+            )
         ) {
             return ManagedDownloadResult.Rejected("HLS belum berada pada status retry")
         }
-        if (!secretStore.contains(downloadId)) {
-            return ManagedDownloadResult.Rejected("Secret HLS tidak tersedia untuk retry aman")
+        if (!secrets.contains(downloadId)) {
+            return ManagedDownloadResult.Rejected(
+                "Konteks aman HLS tidak tersedia; buat unduhan baru",
+            )
         }
         repository.updateProgress(
             downloadId = downloadId,
@@ -138,6 +147,15 @@ class HlsDownloadCoordinator(
         )
     }
 
+    suspend fun deleteMetadata(downloadId: String): Boolean {
+        val item = repository.get(downloadId) ?: return false
+        if (item.kind != DownloadKinds.HLS_VOD) return false
+        workManager.cancelUniqueWork(workName(downloadId))
+        secrets.remove(downloadId)
+        repository.delete(downloadId)
+        return true
+    }
+
     private fun enqueueWork(downloadId: String) {
         val request = OneTimeWorkRequestBuilder<HlsVodDownloadWorker>()
             .setConstraints(
@@ -151,11 +169,8 @@ class HlsDownloadCoordinator(
                 TimeUnit.SECONDS,
             )
             .setInputData(
-                workDataOf(
-                    HlsVodDownloadWorker.KEY_DOWNLOAD_ID to downloadId,
-                ),
+                workDataOf(HlsVodDownloadWorker.KEY_DOWNLOAD_ID to downloadId),
             )
-            .addTag(workName(downloadId))
             .build()
 
         workManager.enqueueUniqueWork(
