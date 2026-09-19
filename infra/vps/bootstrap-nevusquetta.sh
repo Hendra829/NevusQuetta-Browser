@@ -6,7 +6,9 @@ DEPLOY_USER="${NEVUS_DEPLOY_USER:-nevusdeploy}"
 ROOT_DIR="/srv/nevusquetta"
 SITE_DIR="$ROOT_DIR/site"
 RELEASES_DIR="$ROOT_DIR/releases"
+TOOLS_DIR="$ROOT_DIR/tools"
 CURRENT_LINK="$ROOT_DIR/current"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Jalankan bootstrap ini sebagai root." >&2
@@ -26,7 +28,7 @@ if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$DEPLOY_USER"
 fi
 
-install -d -m 0755 "$ROOT_DIR" "$SITE_DIR" "$RELEASES_DIR"
+install -d -m 0755 "$ROOT_DIR" "$SITE_DIR" "$RELEASES_DIR" "$TOOLS_DIR"
 install -d -m 0700 -o "$DEPLOY_USER" -g "$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh"
 touch "/home/$DEPLOY_USER/.ssh/authorized_keys"
 chown "$DEPLOY_USER:$DEPLOY_USER" "/home/$DEPLOY_USER/.ssh/authorized_keys"
@@ -34,6 +36,12 @@ chmod 0600 "/home/$DEPLOY_USER/.ssh/authorized_keys"
 
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$RELEASES_DIR"
 chown "$DEPLOY_USER:$DEPLOY_USER" "$SITE_DIR"
+
+for tool in deploy-candidate.sh deploy-release.sh; do
+  if [[ -f "$SCRIPT_DIR/$tool" ]]; then
+    install -m 0755 -o "$DEPLOY_USER" -g "$DEPLOY_USER"       "$SCRIPT_DIR/$tool" "$TOOLS_DIR/$tool"
+  fi
+done
 
 cat > "$SITE_DIR/index.html" <<EOF
 <!doctype html>
