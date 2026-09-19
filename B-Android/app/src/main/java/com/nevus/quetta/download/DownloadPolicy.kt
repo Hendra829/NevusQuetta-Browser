@@ -79,12 +79,7 @@ object DownloadPolicy {
 
     fun redactedForStorage(uri: Uri): String {
         val validated = validateHttps(uri.toString()) ?: return ""
-        return Uri.Builder()
-            .scheme("https")
-            .encodedAuthority(validated.encodedAuthority)
-            .encodedPath(validated.encodedPath?.takeIf(String::isNotBlank) ?: "/")
-            .build()
-            .toString()
+        return originOnly(validated).orEmpty()
     }
 
     fun resolveRedirect(current: Uri, location: String): Uri? {
