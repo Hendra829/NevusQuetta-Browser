@@ -10,23 +10,20 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
-import android.webkit.GeolocationPermissions
-import android.webkit.PermissionRequest
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebStorage
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.nevus.quetta.browser.BrowserCoordinator
+import com.nevus.quetta.browser.BrowserRuntimeViewModel
 import com.nevus.quetta.data.BrowserDatabase
 import com.nevus.quetta.data.BrowserRepository
 import com.nevus.quetta.data.DownloadEntity
@@ -43,6 +40,8 @@ import com.nevus.quetta.tabs.TabManager
 import com.nevus.quetta.tabs.TabState
 import com.nevus.quetta.web.MediaBridgeHost
 import com.nevus.quetta.web.MediaCandidate
+import com.nevus.quetta.web.NevusWebChromeClient
+import com.nevus.quetta.web.NevusWebViewClient
 import com.nevus.quetta.web.PrivateProfileUnsupportedException
 import com.nevus.quetta.web.SecureWebViewFactory
 import com.nevus.quetta.web.WebViewSessionManager
@@ -61,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sessions: WebViewSessionManager
     private lateinit var downloadCenter: DownloadCenter
     private lateinit var metrics: RuntimePerformanceMetrics
+    private val browserUiState: BrowserRuntimeViewModel by viewModels()
 
     private val bridgeHosts = mutableMapOf<String, MediaBridgeHost>()
     private val pageStartedAt = mutableMapOf<String, Long>()
@@ -91,6 +91,7 @@ class MainActivity : AppCompatActivity() {
 
         configureActions()
         configureBackHandling()
+        observeBrowserUiState()
 
         scope.launch {
             val fallback = intent?.dataString
@@ -110,12 +111,36 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun observeBrowserUiState() {
+        scope.launch {
+            browserUiState.uiState.collectLatest { state ->
+                if (!binding.address.hasFocus() &&
+                    state.currentUrl.isNotBlank() &&
+                    binding.address.text.toString() != state.currentUrl
+                ) {
+                    binding.address.setText(state.currentUrl)
+                }
+                binding.back.isEnabled = state.canGoBack
+                binding.forward.isEnabled = state.canGoForward
+                binding.progress.progress = state.progress
+                binding.progress.visibility =
+                    if (state.isLoading && state.progress < 100) View.VISIBLE else View.GONE
+                binding.errorState.visibility =
+                    if (state.lastErrorMessage == null) View.GONE else View.VISIBLE
+                if (::backCallback.isInitialized && ::coordinator.isInitialized) {
+                    backCallback.isEnabled =
+                        state.canGoBack || coordinator.tabs.state.value.tabs.size > 1
+                }
+            }
+        }
+    }
+
     private fun configureActions() {
         binding.back.setOnClickListener {
-            currentWebView?.takeIf(WebView::canGoBack)?.goBack()
+            if (browserUiState.uiState.value.canGoBack) currentWebView?.goBack()
         }
         binding.forward.setOnClickListener {
-            currentWebView?.takeIf(WebView::canGoForward)?.goForward()
+            if (browserUiState.uiState.value.canGoForward) currentWebView?.goForward()
         }
         binding.home.setOnClickListener { navigate(startPage) }
         binding.reload.setOnClickListener { currentWebView?.reload() }
@@ -134,9 +159,8 @@ class MainActivity : AppCompatActivity() {
     private fun configureBackHandling() {
         backCallback = object : OnBackPressedCallback(false) {
             override fun handleOnBackPressed() {
-                val webView = currentWebView
                 when {
-                    webView?.canGoBack() == true -> webView.goBack()
+                    browserUiState.uiState.value.canGoBack -> currentWebView?.goBack()
                     coordinator.tabs.state.value.tabs.size > 1 -> closeActiveTab()
                     else -> isEnabled = false
                 }
@@ -179,9 +203,11 @@ class MainActivity : AppCompatActivity() {
             currentWebView = webView
             metrics.recordWebViewRebind()
         }
-        binding.address.setText(webView.url ?: tab.url)
-        binding.errorState.visibility = View.GONE
-        updateNavigationButtons(webView)
+        browserUiState.syncActiveWebView(
+            url = webView.url ?: tab.url,
+            canGoBack = webView.canGoBack(),
+            canGoForward = webView.canGoForward(),
+        )
 
         if (webView.url == null) {
             runCatching { Uri.parse(tab.url) }
@@ -205,36 +231,19 @@ class MainActivity : AppCompatActivity() {
         }
         bridgeHosts[tabId] = bridge
 
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                if (coordinator.tabs.state.value.activeTabId != tabId) return
-                binding.progress.progress = newProgress
-                binding.progress.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
-            }
+        webView.webChromeClient = NevusWebChromeClient(
+            uiState = browserUiState,
+            isActive = { coordinator.tabs.state.value.activeTabId == tabId },
+        )
 
-            override fun onPermissionRequest(request: PermissionRequest?) {
-                request?.deny()
-            }
-
-            override fun onGeolocationPermissionsShowPrompt(
-                origin: String?,
-                callback: GeolocationPermissions.Callback?,
-            ) {
-                callback?.invoke(origin, false, false)
-            }
-        }
-
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+        webView.webViewClient = NevusWebViewClient(
+            uiState = browserUiState,
+            isActive = { coordinator.tabs.state.value.activeTabId == tabId },
+            onPageStartedCallback = { _, _ ->
                 pageStartedAt[tabId] = android.os.SystemClock.elapsedRealtime()
-            }
-
-            override fun shouldOverrideUrlLoading(
-                view: WebView,
-                request: WebResourceRequest,
-            ): Boolean {
-                if (!request.isForMainFrame) return false
-                return when (request.url.scheme?.lowercase()) {
+            },
+            shouldOverrideMainFrame = { _, request ->
+                when (request.url.scheme?.lowercase()) {
                     "https" -> {
                         bridge.prepareFor(request.url)
                         false
@@ -245,13 +254,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     else -> true
                 }
-            }
-
-            override fun shouldInterceptRequest(
-                view: WebView,
-                request: WebResourceRequest,
-            ): WebResourceResponse? {
-                return if (NativeGuard.isBlockedHost(request.url.host.orEmpty())) {
+            },
+            interceptRequest = { _, request ->
+                if (NativeGuard.isBlockedHost(request.url.host.orEmpty())) {
                     WebResourceResponse(
                         "text/plain",
                         "utf-8",
@@ -263,38 +268,22 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     null
                 }
-            }
-
-            override fun onPageFinished(view: WebView, url: String) {
+            },
+            onPageFinishedCallback = { view, url ->
                 pageStartedAt.remove(tabId)?.let { started ->
                     metrics.recordPageLoad(android.os.SystemClock.elapsedRealtime() - started)
                 }
-                val tab = coordinator.tabs.tab(tabId) ?: return
-                scope.launch {
-                    coordinator.pageFinished(tabId, url, view.title)
+                val tab = coordinator.tabs.tab(tabId)
+                if (tab != null) {
+                    scope.launch {
+                        coordinator.pageFinished(tabId, url, view.title)
+                    }
+                    if (!tab.isPrivate && url.startsWith("https://")) {
+                        prefs.edit().putString("lastUrl", url).apply()
+                    }
                 }
-                if (!tab.isPrivate && url.startsWith("https://")) {
-                    prefs.edit().putString("lastUrl", url).apply()
-                }
-                if (coordinator.tabs.state.value.activeTabId == tabId) {
-                    binding.address.setText(url)
-                    binding.errorState.visibility = View.GONE
-                    updateNavigationButtons(view)
-                }
-            }
-
-            override fun onReceivedError(
-                view: WebView,
-                request: WebResourceRequest,
-                error: WebResourceError,
-            ) {
-                if (request.isForMainFrame &&
-                    coordinator.tabs.state.value.activeTabId == tabId
-                ) {
-                    binding.errorState.visibility = View.VISIBLE
-                }
-            }
-        }
+            },
+        )
 
         webView.setDownloadListener(DownloadListener {
                 url,
@@ -329,25 +318,16 @@ class MainActivity : AppCompatActivity() {
             else -> {
                 val webView = sessions.existing(tabId) ?: return
                 bridgeHosts[tabId]?.prepareFor(target.uri)
-                binding.errorState.visibility = View.GONE
+                browserUiState.onNavigationRequested(target.uri.toString())
                 webView.loadUrl(target.uri.toString())
             }
-        }
-    }
-
-    private fun updateNavigationButtons(webView: WebView) {
-        binding.back.isEnabled = webView.canGoBack()
-        binding.forward.isEnabled = webView.canGoForward()
-        if (::backCallback.isInitialized) {
-            backCallback.isEnabled =
-                webView.canGoBack() || coordinator.tabs.state.value.tabs.size > 1
         }
     }
 
     private fun updateBackCallback(state: TabState) {
         if (!::backCallback.isInitialized) return
         backCallback.isEnabled =
-            currentWebView?.canGoBack() == true || state.tabs.size > 1
+            browserUiState.uiState.value.canGoBack || state.tabs.size > 1
     }
 
     private fun addCurrentBookmark() {
