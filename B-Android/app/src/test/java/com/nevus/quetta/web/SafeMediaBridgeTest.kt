@@ -11,16 +11,24 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class SafeMediaBridgeTest {
     @Test
-    fun `accepts only same origin https media messages`() {
+    fun `accepts https media from same origin or secure CDN`() {
         val top = Uri.parse("https://site.test/page")
-        val ok = SafeMediaBridge.validate(
+        val same = SafeMediaBridge.validate(
             top,
             """{"type":"media","url":"https://site.test/video.mp4"}""",
         )
-        assertTrue(ok is BridgeDecision.Accepted)
+        val cdn = SafeMediaBridge.validate(
+            top,
+            """{"type":"media","url":"https://cdn.test/master.m3u8"}""",
+        )
+        assertTrue(same is BridgeDecision.Accepted)
+        assertTrue(cdn is BridgeDecision.Accepted)
+    }
 
+    @Test
+    fun `rejects insecure malformed and unsupported payloads`() {
+        val top = Uri.parse("https://site.test/page")
         val rejected = listOf(
-            """{"type":"media","url":"https://evil.test/video.mp4"}""",
             """{"type":"media","url":"http://site.test/video.mp4"}""",
             """{"type":"other","url":"https://site.test/video.mp4"}""",
             """{"type":"media","url":"https://user@site.test/video.mp4"}""",
