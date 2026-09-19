@@ -55,14 +55,6 @@ class BrowserViewModel(
     val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
 
     init {
-        _uiState.update { current ->
-            current.copy(
-                isLoading = true,
-                progress = 0,
-            )
-        }
-        dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
-
         viewModelScope.launch {
             progressEvents
                 .distinctUntilChanged()
@@ -107,6 +99,14 @@ class BrowserViewModel(
                 emitUrl(normalizedUrl)
             }
         }
+
+        _uiState.update { current ->
+            current.copy(
+                isLoading = true,
+                progress = 0,
+            )
+        }
+        dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
     }
 
     /**
@@ -176,6 +176,7 @@ class BrowserViewModel(
             current.copy(
                 isLoading = false,
                 lastErrorMessage = description?.takeIf(String::isNotBlank),
+                progress = 100,
             )
         }
     }

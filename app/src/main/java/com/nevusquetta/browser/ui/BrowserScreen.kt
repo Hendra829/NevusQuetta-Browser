@@ -1,5 +1,6 @@
 package com.nevusquetta.browser.ui
 
+import android.os.Build
 import android.view.ViewGroup
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -81,6 +82,9 @@ fun BrowserScreen(
             settings.allowFileAccessFromFileURLs = false
             settings.allowUniversalAccessFromFileURLs = false
             settings.setSupportMultipleWindows(false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                settings.safeBrowsingEnabled = true
+            }
             isVerticalScrollBarEnabled = true
             webViewClient = webViewClient
             webChromeClient = webChromeClient

@@ -57,7 +57,7 @@ class NevusQuettaWebViewClient(
         super.onReceivedError(view, request, error)
         if (request?.isForMainFrame == true) {
             viewModel.onPageFailed(
-                url = view?.url,
+                url = request.url?.toString(),
                 canGoBack = view?.canGoBack() == true,
                 canGoForward = view?.canGoForward() == true,
                 description = error?.description?.toString(),

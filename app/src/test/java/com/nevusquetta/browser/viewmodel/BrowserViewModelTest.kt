@@ -352,6 +352,9 @@ class BrowserViewModelTest {
 
         viewModel.onPageStarted("https://example.com")
         runCurrent()
+        viewModel.onProgressChanged(45)
+        advanceTimeBy(10L)
+        runCurrent()
         viewModel.onPageFailed(
             url = "https://example.com",
             canGoBack = true,
@@ -363,6 +366,7 @@ class BrowserViewModelTest {
         assertEquals("Network error", viewModel.uiState.value.lastErrorMessage)
         assertTrue(viewModel.uiState.value.canGoBack)
         assertFalse(viewModel.uiState.value.canGoForward)
+        assertEquals(100, viewModel.uiState.value.progress)
     }
 
     @Test
