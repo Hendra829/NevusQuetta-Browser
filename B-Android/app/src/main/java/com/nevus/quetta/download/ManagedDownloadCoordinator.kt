@@ -117,7 +117,7 @@ class ManagedDownloadCoordinator(
 
     suspend fun cancel(downloadId: String): Boolean {
         val item = repository.get(downloadId) ?: return false
-        item.systemDownloadId?.let(manager::remove)
+        item.systemDownloadId?.let { systemId -> manager.remove(systemId) }
         repository.updateProgress(
             downloadId = downloadId,
             status = DownloadStatuses.CANCELED,
