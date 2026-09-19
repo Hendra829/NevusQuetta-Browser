@@ -36,7 +36,7 @@ class WebViewSessionManager(
                 webView.destroy()
                 throw PrivateProfileUnsupportedException()
             }
-            val profileName = "nevus_private_" + tab.id.replace("-", "")
+            val profileName = PRIVATE_PROFILE_PREFIX + tab.id.replace("-", "")
             WebViewCompat.setProfile(webView, profileName)
             privateProfiles[tab.id] = profileName
         }
@@ -50,13 +50,34 @@ class WebViewSessionManager(
 
     fun release(tabId: String) {
         val webView = sessions.remove(tabId) ?: return
+        val profileName = privateProfiles.remove(tabId)
+
+        if (profileName != null) {
+            purgePrivateProfileData(webView)
+        }
+
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.onPause()
+        webView.clearHistory()
+        webView.clearFormData()
         webView.destroy()
 
-        privateProfiles.remove(tabId)?.let { profileName ->
+        if (profileName != null) {
             schedulePrivateProfileDeletion(profileName)
+        }
+    }
+
+    private fun purgePrivateProfileData(webView: WebView) {
+        if (!supportsPrivateProfiles()) return
+        runCatching {
+            val profile = WebViewCompat.getProfile(webView)
+            profile.webStorage.deleteAllData()
+            profile.geolocationPermissions.clearAll()
+            val cookies = profile.cookieManager
+            cookies.removeAllCookies {
+                cookies.flush()
+            }
         }
     }
 
@@ -71,20 +92,21 @@ class WebViewSessionManager(
         ]
 
         mainHandler.postDelayed({
-            val store = ProfileStore.getInstance()
-            val names = runCatching { store.getAllProfileNames() }.getOrElse { emptyList() }
-            if (profileName !in names) return@postDelayed
-
-            val result = runCatching {
-                store.deleteProfile(profileName)
+            val deletion = runCatching {
+                ProfileStore.getInstance().deleteProfile(profileName)
             }
 
-            if (result.isSuccess && result.getOrDefault(false)) {
-                return@postDelayed
-            }
+            // true  = profile existed and deletion was accepted.
+            // false = profile no longer exists. Both are terminal success states.
+            if (deletion.isSuccess) return@postDelayed
 
             if (attempt < DELETE_RETRY_DELAYS_MS.lastIndex) {
                 schedulePrivateProfileDeletion(profileName, attempt + 1)
+            } else {
+                context.getSharedPreferences(RUNTIME_PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(LAST_PRIVATE_DELETE_FAILURE, profileName)
+                    .apply()
             }
         }, delayMillis)
     }
@@ -120,6 +142,9 @@ class WebViewSessionManager(
     }
 
     private companion object {
+        const val PRIVATE_PROFILE_PREFIX = "nevus_private_"
+        const val RUNTIME_PREFS = "nevus_runtime"
+        const val LAST_PRIVATE_DELETE_FAILURE = "lastPrivateProfileDeleteFailure"
         val DELETE_RETRY_DELAYS_MS = longArrayOf(100L, 250L, 500L, 1000L, 2000L, 3000L)
     }
 }
