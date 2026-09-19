@@ -107,6 +107,17 @@ jobs:
           )
           unzip -t "$OUT/NevusQuetta-Complete-Source-2026-09-19.zip"
 
+      - name: Upload complete source snapshot immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: NevusQuetta-Complete-Source-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            source-package/NevusQuetta-Complete-Source-2026-09-19.zip
+            source-package/SOURCE-SHA256SUMS.txt
+            source-package/SOURCE-FILES.txt
+
       - name: Clean
         run: ./gradlew --no-daemon clean
 
