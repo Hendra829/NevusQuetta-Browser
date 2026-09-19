@@ -37,6 +37,11 @@ class PersistenceVerifyTest {
             assertEquals(2, repository.tabs().first().size)
         }
 
+        val cleanupFailures = context
+            .getSharedPreferences("nevus_runtime", Context.MODE_PRIVATE)
+            .getInt("privateCleanupFailures", 0)
+        assertEquals(0, cleanupFailures)
+
         ActivityScenario.launch(MainActivity::class.java).use {
             SystemClock.sleep(1500)
             onView(withId(R.id.tabs)).check(matches(withText("2")))
