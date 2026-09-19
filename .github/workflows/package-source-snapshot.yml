@@ -1,4 +1,5 @@
 name: Package Complete Source Snapshot
+# Snapshot packaging workflow
 
 on:
   push:
