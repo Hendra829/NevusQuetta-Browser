@@ -54,6 +54,27 @@ class DownloadPolicyTest {
     }
 
     @Test
+    fun `stored URL removes path query and fragment tokens`() {
+        val uri = Uri.parse("https://cdn.example.com/private/token-123/video.mp4?sig=secret#x")
+        assertEquals(
+            "https://cdn.example.com/",
+            DownloadPolicy.redactedForStorage(uri),
+        )
+    }
+
+    @Test
+    fun `parses content range resume metadata`() {
+        assertEquals(
+            1024L,
+            DownloadPolicy.parseContentRangeStart("bytes 1024-2047/4096"),
+        )
+        assertEquals(
+            4096L,
+            DownloadPolicy.parseContentRangeTotal("bytes 1024-2047/4096"),
+        )
+    }
+
+    @Test
     fun `filename removes traversal and reserved characters`() {
         val result = DownloadPolicy.sanitizeFileName("../bad:name?.mp4")
         assertFalse(result.contains(".."))
