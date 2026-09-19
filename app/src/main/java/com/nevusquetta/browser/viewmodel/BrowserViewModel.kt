@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.nevusquetta.browser.model.BrowserUiState
 import java.net.URI
 import java.net.URISyntaxException
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -12,15 +13,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -48,16 +48,21 @@ class BrowserViewModel(
         extraBufferCapacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    private val _commands = MutableSharedFlow<BrowserCommand>(
-        extraBufferCapacity = 4,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
+    private val commandChannel = Channel<BrowserCommand>(capacity = Channel.BUFFERED)
     private val _uiState = MutableStateFlow(BrowserUiState())
 
-    val commands: SharedFlow<BrowserCommand> = _commands.asSharedFlow()
+    val commands = commandChannel.receiveAsFlow()
     val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
 
     init {
+        _uiState.update { current ->
+            current.copy(
+                isLoading = true,
+                progress = 0,
+            )
+        }
+        dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
+
         viewModelScope.launch {
             progressEvents
                 .distinctUntilChanged()
@@ -98,8 +103,8 @@ class BrowserViewModel(
                 val normalizedUrl = withContext(urlNormalizationDispatcher) {
                     normalizeUrl(input)
                 }
+                commandChannel.send(BrowserCommand.LoadUrl(normalizedUrl))
                 emitUrl(normalizedUrl)
-                _commands.emit(BrowserCommand.LoadUrl(normalizedUrl))
             }
         }
     }
@@ -221,8 +226,8 @@ class BrowserViewModel(
                 progress = 0,
             )
         }
-        emitUrl(BrowserUiState.DEFAULT_HOME_URL)
         dispatchCommand(BrowserCommand.LoadUrl(BrowserUiState.DEFAULT_HOME_URL))
+        emitUrl(BrowserUiState.DEFAULT_HOME_URL)
     }
 
     /**
@@ -261,7 +266,7 @@ class BrowserViewModel(
 
     private fun dispatchCommand(command: BrowserCommand) {
         viewModelScope.launch {
-            _commands.emit(command)
+            commandChannel.send(command)
         }
     }
 
@@ -293,14 +298,17 @@ class BrowserViewModel(
                     normalizedScheme in SAFE_SCHEMES &&
                     (
                         normalizedScheme !in NETWORK_SCHEMES ||
-                            !uri.host.isNullOrBlank()
+                            (
+                                !uri.host.isNullOrBlank() &&
+                                    uri.userInfo.isNullOrBlank()
+                                )
                         )
                 ) {
                     uri.toString()
                 } else {
                     BrowserUiState.DEFAULT_HOME_URL
                 }
-            } else if (uri.host.isNullOrBlank()) {
+            } else if (uri.host.isNullOrBlank() || !uri.userInfo.isNullOrBlank()) {
                 BrowserUiState.DEFAULT_HOME_URL
             } else {
                 uri.toString()

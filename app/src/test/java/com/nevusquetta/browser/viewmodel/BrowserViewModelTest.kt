@@ -354,13 +354,15 @@ class BrowserViewModelTest {
         runCurrent()
         viewModel.onPageFailed(
             url = "https://example.com",
-            canGoBack = false,
+            canGoBack = true,
             canGoForward = false,
             description = "Network error",
         )
 
         assertFalse(viewModel.uiState.value.isLoading)
         assertEquals("Network error", viewModel.uiState.value.lastErrorMessage)
+        assertTrue(viewModel.uiState.value.canGoBack)
+        assertFalse(viewModel.uiState.value.canGoForward)
     }
 
     @Test

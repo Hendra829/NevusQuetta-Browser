@@ -35,8 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -82,7 +84,6 @@ fun BrowserScreen(
             isVerticalScrollBarEnabled = true
             webViewClient = webViewClient
             webChromeClient = webChromeClient
-            loadUrl(uiState.currentUrl)
         }
     }
     var addressBarValue by rememberSaveable { mutableStateOf(uiState.currentUrl) }
@@ -150,7 +151,10 @@ fun BrowserScreen(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 8.dp)
+                    .semantics {
+                        liveRegion = LiveRegionMode.Assertive
+                    },
             )
         }
 
