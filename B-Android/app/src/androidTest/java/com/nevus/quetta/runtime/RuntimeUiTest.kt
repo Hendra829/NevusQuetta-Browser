@@ -91,7 +91,7 @@ class RuntimeUiTest {
 
             if (supportsProfiles) {
                 onView(withId(R.id.privateIndicator)).check(matches(isDisplayed()))
-                val names = ProfileStore.getInstance().getAllProfileNames()
+                val names = readProfileNamesOnMainThread()
                 assertTrue(names.any { name -> name.startsWith("nevus_private_") })
 
                 onView(withId(R.id.tabs)).perform(click())
@@ -99,7 +99,7 @@ class RuntimeUiTest {
                 device.waitForIdle()
                 SystemClock.sleep(1000)
 
-                val afterClose = ProfileStore.getInstance().getAllProfileNames()
+                val afterClose = readProfileNamesOnMainThread()
                 assertTrue(afterClose.none { name -> name.startsWith("nevus_private_") })
                 assertEquals(3, readTabCount())
             } else {
@@ -113,6 +113,14 @@ class RuntimeUiTest {
         onView(withText(R.string.new_tab)).perform(click())
         device.waitForIdle()
         SystemClock.sleep(500)
+    }
+
+    private fun readProfileNamesOnMainThread(): List<String> {
+        var names: List<String> = emptyList()
+        instrumentation.runOnMainSync {
+            names = ProfileStore.getInstance().getAllProfileNames()
+        }
+        return names
     }
 
     private fun readTabCount(): Int {
