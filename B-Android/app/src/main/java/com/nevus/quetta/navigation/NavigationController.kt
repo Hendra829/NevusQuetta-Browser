@@ -22,18 +22,33 @@ class NavigationController {
             return NavigationTarget.Rejected("Karakter kontrol tidak diizinkan")
         }
 
-        val explicitScheme = SCHEME.find(value)?.groupValues?.get(1)?.lowercase(Locale.US)
-        if (explicitScheme != null && explicitScheme !in setOf("http", "https")) {
-            val hostPort = value.substringAfter(':', "")
-            val looksLikeHostPort = hostPort.all(Char::isDigit) &&
-                (value.substringBefore(':').equals("localhost", true) || value.substringBefore(':').contains('.'))
-            if (!looksLikeHostPort) return NavigationTarget.Rejected("Skema tidak didukung")
+        val hierarchicalScheme = HIERARCHICAL_SCHEME
+            .find(value)
+            ?.groupValues
+            ?.get(1)
+            ?.lowercase(Locale.US)
+
+        if (hierarchicalScheme != null && hierarchicalScheme !in WEB_SCHEMES) {
+            return NavigationTarget.Rejected("Skema tidak didukung")
         }
 
-        val hasWhitespace = value.any(Char::isWhitespace)
+        val genericScheme = SCHEME
+            .find(value)
+            ?.groupValues
+            ?.get(1)
+            ?.lowercase(Locale.US)
+
+        if (hierarchicalScheme == null &&
+            genericScheme != null &&
+            genericScheme !in WEB_SCHEMES &&
+            !looksLikeHostPort(value)
+        ) {
+            return NavigationTarget.Rejected("Skema tidak didukung")
+        }
+
         val candidate = when {
-            explicitScheme == "http" || explicitScheme == "https" -> value
-            !hasWhitespace && looksLikeAddress(value) -> "https://$value"
+            hierarchicalScheme in WEB_SCHEMES -> value
+            value.none(Char::isWhitespace) && looksLikeAddress(value) -> "https://$value"
             else -> return NavigationTarget.Search(searchUri(value))
         }
 
@@ -43,8 +58,9 @@ class NavigationController {
     private fun normalizeWeb(candidate: String): NavigationTarget {
         val parsed = runCatching { Uri.parse(candidate) }.getOrNull()
             ?: return NavigationTarget.Rejected("Alamat tidak valid")
+
         val scheme = parsed.scheme?.lowercase(Locale.US)
-        if (scheme !in setOf("http", "https")) return NavigationTarget.Rejected("Skema tidak didukung")
+        if (scheme !in WEB_SCHEMES) return NavigationTarget.Rejected("Skema tidak didukung")
         if (parsed.encodedAuthority?.contains('@') == true) {
             return NavigationTarget.Rejected("User-info pada alamat tidak diizinkan")
         }
@@ -59,7 +75,7 @@ class NavigationController {
         val normalized = Uri.Builder()
             .scheme("https")
             .encodedAuthority(authority)
-            .encodedPath(parsed.encodedPath ?: "")
+            .encodedPath(parsed.encodedPath?.takeIf { it.isNotEmpty() } ?: "/")
             .apply {
                 parsed.encodedQuery?.let(::encodedQuery)
                 parsed.encodedFragment?.let(::encodedFragment)
@@ -77,13 +93,35 @@ class NavigationController {
         .build()
 
     private fun looksLikeAddress(value: String): Boolean {
-        val hostPart = value
+        val authorityLike = value
             .substringBefore('/')
             .substringBefore('?')
             .substringBefore('#')
-        if (hostPart.equals("localhost", true) || hostPart.startsWith('[')) return true
-        val withoutPort = hostPart.substringBeforeLast(':', hostPart)
-        return withoutPort.contains('.') || withoutPort.all { it.isDigit() || it == '.' }
+
+        if (authorityLike.startsWith('[')) return true
+        val host = authorityLike.substringBefore(':')
+        return host.equals("localhost", ignoreCase = true) ||
+            host.contains('.') ||
+            host.all { it.isDigit() || it == '.' }
+    }
+
+    private fun looksLikeHostPort(value: String): Boolean {
+        val authorityLike = value
+            .substringBefore('/')
+            .substringBefore('?')
+            .substringBefore('#')
+
+        if (authorityLike.startsWith('[')) return true
+        val colon = authorityLike.lastIndexOf(':')
+        if (colon <= 0 || colon == authorityLike.lastIndex) return false
+
+        val host = authorityLike.substring(0, colon)
+        val port = authorityLike.substring(colon + 1).toIntOrNull() ?: return false
+        if (port !in 1..65535) return false
+
+        return host.equals("localhost", ignoreCase = true) ||
+            host.contains('.') ||
+            host.all { it.isDigit() || it == '.' }
     }
 
     private fun normalizeHost(host: String): String? = runCatching {
@@ -92,6 +130,8 @@ class NavigationController {
     }.getOrNull()?.takeIf { it.isNotBlank() }
 
     private companion object {
+        val WEB_SCHEMES = setOf("http", "https")
         val SCHEME = Regex("^([A-Za-z][A-Za-z0-9+.-]*):")
+        val HIERARCHICAL_SCHEME = Regex("^([A-Za-z][A-Za-z0-9+.-]*)://")
     }
 }
