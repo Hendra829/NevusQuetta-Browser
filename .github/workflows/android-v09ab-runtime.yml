@@ -45,6 +45,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Reclaim hosted-runner disk safely
+        run: |
+          echo "=== disk before cleanup ==="
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift || true
+          docker system prune -af --volumes || true
+          sudo apt-get clean
+          echo "=== disk after cleanup ==="
+          df -h /
+
       - name: Install compile SDK and native toolchain
         run: |
           sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
