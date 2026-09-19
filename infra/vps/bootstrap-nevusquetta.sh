@@ -79,16 +79,12 @@ server {
         try_files \$uri \$uri/ =404;
     }
 
-    location /download/ {
+    location ^~ /download/ {
         alias $CURRENT_LINK/;
         autoindex on;
         add_header X-Content-Type-Options nosniff always;
         add_header Referrer-Policy no-referrer always;
         add_header Cache-Control "no-store" always;
-    }
-
-    location ~* \.(?:apk|zip)$ {
-        add_header X-Content-Type-Options nosniff always;
         add_header Content-Disposition attachment always;
     }
 
