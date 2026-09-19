@@ -18,7 +18,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -28,54 +27,54 @@ class PersistenceSeedTest {
         InstrumentationRegistry.getInstrumentation().targetContext
 
     @Test
-    fun seedPersistentStateAndConfirmUiRestore() = runBlocking(Dispatchers.IO) {
-        val database = BrowserDatabase.get(context)
-        database.clearAllTables()
-        val repository = BrowserRepository(database, ioDispatcher = Dispatchers.IO)
+    fun seedPersistentStateAndConfirmUiRestore() {
+        runBlocking(Dispatchers.IO) {
+            val database = BrowserDatabase.get(context)
+            database.clearAllTables()
+            val repository = BrowserRepository(database, ioDispatcher = Dispatchers.IO)
 
-        repository.upsertBookmark(
-            rawUrl = "https://example.com/",
-            title = "Runtime Bookmark",
-            createdAt = 1000L,
-        )
-        repository.recordVisit(
-            rawUrl = "https://example.org/",
-            title = "Runtime History",
-            isPrivate = false,
-            visitedAt = 2000L,
-        )
-        repository.replaceSession(
-            listOf(
-                TabEntity(
-                    tabId = "runtime-a",
-                    url = "https://example.com/",
-                    title = "Example A",
-                    isPrivate = false,
-                    isActive = true,
-                    position = 0,
-                    updatedAt = 3000L,
+            repository.upsertBookmark(
+                rawUrl = "https://example.com/",
+                title = "Runtime Bookmark",
+                createdAt = 1000L,
+            )
+            repository.recordVisit(
+                rawUrl = "https://example.org/",
+                title = "Runtime History",
+                isPrivate = false,
+                visitedAt = 2000L,
+            )
+            repository.replaceSession(
+                listOf(
+                    TabEntity(
+                        tabId = "runtime-a",
+                        url = "https://example.com/",
+                        title = "Example A",
+                        isPrivate = false,
+                        isActive = true,
+                        position = 0,
+                        updatedAt = 3000L,
+                    ),
+                    TabEntity(
+                        tabId = "runtime-b",
+                        url = "https://example.org/",
+                        title = "Example B",
+                        isPrivate = false,
+                        isActive = false,
+                        position = 1,
+                        updatedAt = 4000L,
+                    ),
                 ),
-                TabEntity(
-                    tabId = "runtime-b",
-                    url = "https://example.org/",
-                    title = "Example B",
-                    isPrivate = false,
-                    isActive = false,
-                    position = 1,
-                    updatedAt = 4000L,
-                ),
-            ),
-        )
+            )
 
-        assertEquals(1, repository.bookmarks().first().size)
-        assertEquals(1, repository.history().first().size)
-        assertEquals(2, repository.tabs().first().size)
+            assertEquals(1, repository.bookmarks().first().size)
+            assertEquals(1, repository.history().first().size)
+            assertEquals(2, repository.tabs().first().size)
+        }
 
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            ActivityScenario.launch(MainActivity::class.java).use {
-                SystemClock.sleep(1500)
-                onView(withId(R.id.tabs)).check(matches(withText("2")))
-            }
+        ActivityScenario.launch(MainActivity::class.java).use {
+            SystemClock.sleep(1500)
+            onView(withId(R.id.tabs)).check(matches(withText("2")))
         }
         println("NEVUS_PERSISTENCE_SEED=PASS")
     }
