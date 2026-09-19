@@ -1,0 +1,83 @@
+name: Package Complete Source Snapshot
+
+on:
+  push:
+    branches: ["package/source-snapshot-20260919"]
+    paths:
+      - ".github/workflows/package-source-snapshot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact snapshot
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build sanitized complete source ZIP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DIST="$RUNNER_TEMP/nevusquetta-package"
+          STAGE="$DIST/stage"
+          OUT="$DIST/out"
+          rm -rf "$DIST"
+          mkdir -p "$STAGE" "$OUT"
+
+          git archive --format=tar HEAD | tar -xf - -C "$STAGE"
+
+          # Remove obsolete binary archives and generated garbage if tracked accidentally.
+          find "$STAGE" -type f \(             -iname '*v0.8*.zip' -o             -iname '*v0.8*.tar' -o             -iname '*v0.8*.tar.gz' -o             -iname '*v0.8*.tgz' -o             -iname '*v0.8*.7z'           \) -delete
+
+          find "$STAGE" -depth -type d \(             -name build -o             -name .gradle -o             -name cache -o             -name caches -o             -name node_modules           \) -exec rm -rf {} +
+
+          mapfile -t forbidden < <(
+            find "$STAGE" -type f \(               -name '.env' -o -name '.env.*' -o               -name '*.jks' -o -name '*.keystore' -o               -name 'local.properties' -o               -name 'secrets.properties' -o               -name 'credentials.json' -o               -name 'id_rsa' -o -name 'id_ed25519'             \) -print
+          )
+          if (( ${#forbidden[@]} > 0 )); then
+            printf 'Forbidden secret/signing file found: %s\n' "${forbidden[@]}" >&2
+            exit 1
+          fi
+
+          {
+            echo "NevusQuetta complete source snapshot"
+            echo "Repository: ${GITHUB_REPOSITORY}"
+            echo "Snapshot branch: ${GITHUB_REF_NAME}"
+            echo "Snapshot commit: ${GITHUB_SHA}"
+            echo "Generated UTC: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            echo "Included: all tracked source/workflows/scripts/docs/infra/configuration."
+            echo "Excluded: secrets, private keys, signing keystores, caches, build outputs, node_modules, obsolete V0.8 binary archives."
+          } > "$STAGE/SNAPSHOT-INFO.txt"
+
+          (
+            cd "$STAGE"
+            find . -type f -print | sort > "$OUT/SOURCE-FILES.txt"
+            zip -X -q -r "$OUT/NevusQuetta-Complete-Source-2026-09-19.zip" .
+          )
+
+          (
+            cd "$OUT"
+            sha256sum NevusQuetta-Complete-Source-2026-09-19.zip > SHA256SUMS.txt
+          )
+
+          unzip -t "$OUT/NevusQuetta-Complete-Source-2026-09-19.zip"
+          cat "$OUT/SHA256SUMS.txt"
+          wc -l "$OUT/SOURCE-FILES.txt"
+
+      - name: Upload complete source package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NevusQuetta-Complete-Source-2026-09-19
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            ${{ runner.temp }}/nevusquetta-package/out/NevusQuetta-Complete-Source-2026-09-19.zip
+            ${{ runner.temp }}/nevusquetta-package/out/SHA256SUMS.txt
+            ${{ runner.temp }}/nevusquetta-package/out/SOURCE-FILES.txt
