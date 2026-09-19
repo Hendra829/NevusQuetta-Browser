@@ -85,6 +85,22 @@ class ResumableDownloadWorker(
                             HttpURLConnection.HTTP_PARTIAL -> {
                                 val start = DownloadPolicy.parseContentRangeStart(contentRange)
                                 if (start != offset) error("INVALID_CONTENT_RANGE")
+                                val responseEtag = connection.getHeaderField("ETag")
+                                val responseLastModified =
+                                    connection.getHeaderField("Last-Modified")
+                                if (!etag.isNullOrBlank() &&
+                                    !responseEtag.isNullOrBlank() &&
+                                    etag != responseEtag
+                                ) {
+                                    error("RESUME_ETAG_CHANGED")
+                                }
+                                if (etag.isNullOrBlank() &&
+                                    !lastModified.isNullOrBlank() &&
+                                    !responseLastModified.isNullOrBlank() &&
+                                    lastModified != responseLastModified
+                                ) {
+                                    error("RESUME_LAST_MODIFIED_CHANGED")
+                                }
                             }
                             HttpURLConnection.HTTP_OK -> {
                                 // Server ignored Range or validator changed. Restart safely.
@@ -256,7 +272,11 @@ class ResumableDownloadWorker(
             }
             if (offset > 0L) {
                 connection.setRequestProperty("Range", "bytes=$offset-")
-                (etag ?: lastModified)?.takeIf(String::isNotBlank)
+                val strongEtag = etag
+                    ?.takeIf(String::isNotBlank)
+                    ?.takeUnless { it.trimStart().startsWith("W/", ignoreCase = true) }
+                (strongEtag ?: lastModified)
+                    ?.takeIf(String::isNotBlank)
                     ?.let { connection.setRequestProperty("If-Range", it) }
             }
 
@@ -334,7 +354,9 @@ class ResumableDownloadWorker(
                 digest.update(buffer, 0, read)
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest().joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
     }
 
     private fun createForegroundInfo(text: String): ForegroundInfo =
@@ -361,6 +383,11 @@ class ResumableDownloadWorker(
     private fun sanitizeError(error: Throwable): String =
         (error.message ?: error::class.java.simpleName)
             .replace(Regex("""https://[^\s]+"""), "[url]")
+            .replace(
+                Regex("""(?i)(token|key|sig|signature|auth)=([^&\s]+)"""),
+            ) { match ->
+                match.groupValues[1] + "=[redacted]"
+            }
             .take(160)
 
     private data class Response(
