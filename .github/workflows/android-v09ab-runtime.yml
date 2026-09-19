@@ -2,6 +2,7 @@ name: Android V0.9AB Runtime Matrix
 
 on:
   pull_request:
+    branches: ["feat/v09ab"]
     paths:
       - "B-Android/**"
       - ".github/workflows/android-v09ab-runtime.yml"
