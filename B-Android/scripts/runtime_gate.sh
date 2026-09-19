@@ -38,6 +38,7 @@ TEST_APK="app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk"
 [[ -s "$TEST_APK" ]] || fail "androidTest APK hilang"
 adb install -r -t "$APP_APK" | tee "$OUT/install-app.txt"
 adb install -r -t "$TEST_APK" | tee "$OUT/install-test.txt"
+adb shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS >/dev/null 2>&1 || true
 pass "APK + androidTest installed"
 
 run_class "com.nevus.quetta.runtime.RuntimeUiTest"
