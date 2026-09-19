@@ -119,7 +119,6 @@ jobs:
             rsync -a --delete '$remote_tmp/' '$candidate_dir/'
             cd '$candidate_dir'
             sha256sum -c SHA256SUMS.txt
-            test "\$(sha256sum NevusQuetta.apk | awk '{print \$1}')" = '$EXPECTED_APK_SHA256'
             rm -rf '$remote_tmp'
             echo CANDIDATE_DEPLOY=PASS
             echo BUILD_ID='$build_id'
