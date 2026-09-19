@@ -26,21 +26,20 @@ class PersistenceVerifyTest {
         InstrumentationRegistry.getInstrumentation().targetContext
 
     @Test
-    fun persistentStateSurvivesProcessDeath() = runBlocking(Dispatchers.IO) {
-        val repository = BrowserRepository(
-            BrowserDatabase.get(context),
-            ioDispatcher = Dispatchers.IO,
-        )
+    fun persistentStateSurvivesProcessDeath() {
+        runBlocking(Dispatchers.IO) {
+            val repository = BrowserRepository(
+                BrowserDatabase.get(context),
+                ioDispatcher = Dispatchers.IO,
+            )
+            assertEquals(1, repository.bookmarks().first().size)
+            assertEquals(1, repository.history().first().size)
+            assertEquals(2, repository.tabs().first().size)
+        }
 
-        assertEquals(1, repository.bookmarks().first().size)
-        assertEquals(1, repository.history().first().size)
-        assertEquals(2, repository.tabs().first().size)
-
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            ActivityScenario.launch(MainActivity::class.java).use {
-                SystemClock.sleep(1500)
-                onView(withId(R.id.tabs)).check(matches(withText("2")))
-            }
+        ActivityScenario.launch(MainActivity::class.java).use {
+            SystemClock.sleep(1500)
+            onView(withId(R.id.tabs)).check(matches(withText("2")))
         }
         println("NEVUS_PROCESS_DEATH_PERSISTENCE=PASS")
     }
