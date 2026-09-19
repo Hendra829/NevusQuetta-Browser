@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private val navigation = NavigationController()
 
     private var currentWebView: WebView? = null
+    private lateinit var backCallback: OnBackPressedCallback
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -123,16 +124,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureBackHandling() {
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+        backCallback = object : OnBackPressedCallback(false) {
             override fun handleOnBackPressed() {
                 val webView = currentWebView
                 when {
                     webView?.canGoBack() == true -> webView.goBack()
                     coordinator.tabs.state.value.tabs.size > 1 -> closeActiveTab()
-                    else -> finish()
+                    else -> isEnabled = false
                 }
             }
-        })
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
     }
 
     private fun renderState(state: TabState) {
@@ -140,6 +142,7 @@ class MainActivity : AppCompatActivity() {
         binding.privateIndicator.visibility =
             if (state.activeTab.isPrivate) View.VISIBLE else View.GONE
         showActiveTab(state.activeTab)
+        updateBackCallback(state)
         trimInactiveSessions(state, maxResident = 4)
     }
 
@@ -313,6 +316,16 @@ class MainActivity : AppCompatActivity() {
     private fun updateNavigationButtons(webView: WebView) {
         binding.back.isEnabled = webView.canGoBack()
         binding.forward.isEnabled = webView.canGoForward()
+        if (::backCallback.isInitialized) {
+            backCallback.isEnabled =
+                webView.canGoBack() || coordinator.tabs.state.value.tabs.size > 1
+        }
+    }
+
+    private fun updateBackCallback(state: TabState) {
+        if (!::backCallback.isInitialized) return
+        backCallback.isEnabled =
+            currentWebView?.canGoBack() == true || state.tabs.size > 1
     }
 
     private fun addCurrentBookmark() {
