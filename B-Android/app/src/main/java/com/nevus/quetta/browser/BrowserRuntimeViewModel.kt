@@ -3,6 +3,7 @@ package com.nevus.quetta.browser
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -19,18 +21,6 @@ class BrowserRuntimeViewModel(
     private val progressDebounceMillis: Long = 50L,
     private val urlDebounceMillis: Long = 120L,
 ) : ViewModel() {
-    private val progressEvents = MutableSharedFlow<Int>(
-        // replay = 1 retains the latest progress value for a collector that has not subscribed
-        // yet. WebView progress callbacks run on the main thread and can call
-        // onProgressChanged() before the collectors started in `init` have been dispatched.
-        // With replay = 0 and no subscribers, tryEmit() reports success while the value is
-        // silently dropped, so the debounced progress never reached the UI state and
-        // BrowserRuntimeViewModelTest.progressIsDebouncedAndLateProgressCannotRegressFinishedPage
-        // observed progress = 0 instead of the debounced value.
-        replay = 1,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
     private val urlEvents = MutableSharedFlow<String>(
         extraBufferCapacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -38,26 +28,9 @@ class BrowserRuntimeViewModel(
     private val mutableState = MutableStateFlow(BrowserUiState())
     val uiState: StateFlow<BrowserUiState> = mutableState.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            progressEvents
-                .distinctUntilChanged()
-                .debounce(progressDebounceMillis)
-                .collect { raw ->
-                    val progress = raw.coerceIn(0, 100)
-                    mutableState.update { current ->
-                        if (!current.isLoading && progress < 100) {
-                            current
-                        } else {
-                            current.copy(
-                                progress = progress,
-                                isLoading = progress in 0..99,
-                            )
-                        }
-                    }
-                }
-        }
+    private var progressDebounceJob: Job? = null
 
+    init {
         viewModelScope.launch {
             urlEvents
                 .filter(String::isNotBlank)
@@ -85,6 +58,7 @@ class BrowserRuntimeViewModel(
 
     fun onPageStarted(url: String?) {
         emitUrl(url)
+        progressDebounceJob?.cancel()
         mutableState.update {
             it.copy(
                 isLoading = true,
@@ -95,7 +69,21 @@ class BrowserRuntimeViewModel(
     }
 
     fun onProgressChanged(progress: Int) {
-        progressEvents.tryEmit(progress)
+        val next = progress.coerceIn(0, 100)
+        progressDebounceJob?.cancel()
+        progressDebounceJob = viewModelScope.launch {
+            delay(progressDebounceMillis)
+            mutableState.update { current ->
+                if (!current.isLoading && next < 100) {
+                    current
+                } else {
+                    current.copy(
+                        progress = next,
+                        isLoading = next in 0..99,
+                    )
+                }
+            }
+        }
     }
 
     fun onVisitedHistoryUpdated(

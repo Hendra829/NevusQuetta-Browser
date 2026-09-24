@@ -74,15 +74,6 @@ class BrowserRuntimeViewModelTest {
             canGoBack = false,
             canGoForward = false,
         )
-        advanceTimeBy(25)
-        runCurrent()
-        assertEquals(100, viewModel.uiState.value.progress)
-
-        // Progress must be emitted *after* the page finished and *after* the debounce
-        // window elapsed, otherwise the still-arming debounce fires post-finish and
-        // legitimately overwrites 100 (progressEvents is a buffered SharedFlow, so
-        // every write issued before the virtual clock advances folds into one
-        // debounced emission). Verifying the guard requires an actually-late event.
         viewModel.onProgressChanged(30)
         advanceTimeBy(25)
         runCurrent()
@@ -105,5 +96,44 @@ class BrowserRuntimeViewModelTest {
         assertTrue(state.canGoBack)
         assertTrue(state.canGoForward)
         assertFalse(state.isLoading)
+    }
+
+    @Test
+    fun progressOneHundredClearsLoadingAfterDebounce() = runTest {
+        val viewModel = BrowserRuntimeViewModel(
+            progressDebounceMillis = 25,
+            urlDebounceMillis = 10,
+        )
+
+        viewModel.onPageStarted("https://example.com/")
+        assertTrue(viewModel.uiState.value.isLoading)
+
+        viewModel.onProgressChanged(100)
+        advanceTimeBy(26)
+        runCurrent()
+
+        assertFalse(viewModel.uiState.value.isLoading)
+        assertEquals(100, viewModel.uiState.value.progress)
+    }
+
+    @Test
+    fun rapidProgressBurstAppliesOnlyLastValueAfterDebounce() = runTest {
+        val viewModel = BrowserRuntimeViewModel(
+            progressDebounceMillis = 25,
+            urlDebounceMillis = 10,
+        )
+
+        viewModel.onPageStarted("https://example.com/")
+        for (value in listOf(5, 15, 30, 60, 80)) {
+            viewModel.onProgressChanged(value)
+        }
+
+        advanceTimeBy(24)
+        assertEquals(0, viewModel.uiState.value.progress)
+
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(80, viewModel.uiState.value.progress)
+        assertTrue(viewModel.uiState.value.isLoading)
     }
 }

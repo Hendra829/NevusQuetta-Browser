@@ -1,0 +1,16 @@
+*.o
+C-Chromium/build/
+__pycache__/
+nq-test-tmp/
+
+# Gradle / Android (fondasi awal Android native)
+.gradle
+.idea
+local.properties
+
+# Output build Gradle (termasuk sub-proyek seperti B-Android/)
+build
+*/build
+
+# Data plugin Kotlin
+.kotlin
