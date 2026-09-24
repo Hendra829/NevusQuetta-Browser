@@ -9,3 +9,9 @@ build
 
 # Ignore Kotlin plugin data
 .kotlin
+
+# Native build and Python artifacts
+*.o
+C-Chromium/build/
+__pycache__/
+nq-test-tmp/

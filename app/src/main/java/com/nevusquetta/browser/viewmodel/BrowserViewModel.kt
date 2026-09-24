@@ -43,6 +43,12 @@ class BrowserViewModel(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     private val progressEvents = MutableSharedFlow<Int>(
+        // replay = 1 retains the latest progress value for a collector that has not subscribed
+        // yet. WebView progress callbacks run on the main thread and can call
+        // onProgressChanged() before the collectors started in `init` have been dispatched.
+        // With replay = 0 and no subscribers, tryEmit() reports success while the value is
+        // silently dropped, so debounced progress never reached the UI state.
+        replay = 1,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
