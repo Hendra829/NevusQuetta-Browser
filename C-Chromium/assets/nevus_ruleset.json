@@ -1,0 +1,22 @@
+{
+  "name": "NevusQuetta Default Blocklist",
+  "version": "2026.09.1",
+  "license": "CC-BY-SA-4.0 (disusun sendiri untuk proyek; TIDAK menyalin daftar pihak ketiga)",
+  "signed": false,
+  "warning": "RULESET TANPA TANDATANGAN. Build rilis menolaknya (NQ_ALLOW_UNSIGNED_RULESET=OFF). Ruleset ini adalah daftar minimal yang disusun manual untuk build lab; sebelum rilis harus diganti dengan daftar yang bersumber, berlisensi jelas, dan ditandatangani.",
+  "rules": [
+    { "host": "doubleclick.net", "match": "suffix" },
+    { "host": "googlesyndication.com", "match": "suffix" },
+    { "host": "googleadservices.com", "match": "suffix" },
+    { "host": "google-analytics.com", "match": "suffix" },
+    { "host": "scorecardresearch.com", "match": "suffix" },
+    { "host": "adnxs.com", "match": "suffix" },
+    { "host": "criteo.com", "match": "suffix" },
+    { "host": "taboola.com", "match": "suffix" },
+    { "host": "outbrain.com", "match": "suffix" },
+    { "host": "moatads.com", "match": "suffix" },
+    { "host": "admaster.com.cn", "match": "suffix" },
+    { "host": "umeng.com", "match": "suffix" },
+    { "host": "cnzz.com", "match": "suffix" }
+  ]
+}
