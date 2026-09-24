@@ -20,6 +20,14 @@ class BrowserRuntimeViewModel(
     private val urlDebounceMillis: Long = 120L,
 ) : ViewModel() {
     private val progressEvents = MutableSharedFlow<Int>(
+        // replay = 1 retains the latest progress value for a collector that has not subscribed
+        // yet. WebView progress callbacks run on the main thread and can call
+        // onProgressChanged() before the collectors started in `init` have been dispatched.
+        // With replay = 0 and no subscribers, tryEmit() reports success while the value is
+        // silently dropped, so the debounced progress never reached the UI state and
+        // BrowserRuntimeViewModelTest.progressIsDebouncedAndLateProgressCannotRegressFinishedPage
+        // observed progress = 0 instead of the debounced value.
+        replay = 1,
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
