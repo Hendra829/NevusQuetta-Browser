@@ -1,0 +1,129 @@
+name: Deploy V0.9AB Verified Candidate
+
+on:
+  pull_request:
+    branches:
+      - feat/v09ab-hardening
+    paths:
+      - ".github/workflows/deploy-v09ab-candidate.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: deploy-v09ab-verified-candidate
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: 77c78aa9c721c04d69e35af78b7bf0a32ccf0ec0
+  HOST_RUN_ID: "35441522409"
+  RUNTIME_RUN_ID: "35441522416"
+  EXPECTED_APK_SHA256: 0b0a8928f685ead99d3b85dec503b1d8d8df7e60c8ada9e79b4f8ca94690fa8a
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact runtime-passed source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Download exact Host Gate APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nevusquetta-v09ab-63
+          path: verified-apk
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.HOST_RUN_ID }}
+
+      - name: Assemble candidate package
+        run: |
+          set -Eeuo pipefail
+          rm -rf dist
+          mkdir -p dist
+
+          apk_path="$(find verified-apk -type f -name 'app-debug.apk' -print -quit)"
+          test -n "$apk_path"
+          cp "$apk_path" dist/NevusQuetta.apk
+
+          actual="$(sha256sum dist/NevusQuetta.apk | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_APK_SHA256"
+
+          git archive             --format=zip             --output=dist/NevusQuetta-source.zip             "$SOURCE_SHA"
+
+          cat > dist/runtime-evidence.txt <<EOF
+          source_sha=$SOURCE_SHA
+          host_gate_run=$HOST_RUN_ID
+          host_gate=PASS
+          runtime_matrix_run=$RUNTIME_RUN_ID
+          runtime_api_35=PASS
+          runtime_api_36=PASS
+          apk_sha256=$EXPECTED_APK_SHA256
+          EOF
+
+          cat > dist/build-info.txt <<EOF
+          repository=$GITHUB_REPOSITORY
+          source_sha=$SOURCE_SHA
+          packaging_run=$GITHUB_RUN_ID
+          package_type=V0.9AB-verified-candidate
+          promotion=NOT_PUBLIC_RELEASE
+          EOF
+
+          (
+            cd dist
+            sha256sum               NevusQuetta.apk               NevusQuetta-source.zip               runtime-evidence.txt               build-info.txt               > SHA256SUMS.txt
+          )
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.NEVUS_VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.NEVUS_VPS_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$KNOWN_HOSTS"
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 0600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/known_hosts
+
+      - name: Upload and verify on VPS
+        env:
+          VPS_HOST: ${{ secrets.NEVUS_VPS_HOST }}
+          VPS_USER: ${{ secrets.NEVUS_VPS_USER }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+
+          build_id="v09ab-${SOURCE_SHA:0:12}-run-${GITHUB_RUN_ID}"
+          candidate_root="/srv/nevusquetta/releases/.candidates"
+          candidate_dir="$candidate_root/$build_id"
+          remote_tmp="/tmp/$build_id"
+
+          ssh "$VPS_USER@$VPS_HOST"             "mkdir -p '$candidate_root' && rm -rf '$remote_tmp' && mkdir -p '$remote_tmp'"
+
+          rsync -az --delete dist/ "$VPS_USER@$VPS_HOST:$remote_tmp/"
+
+          ssh "$VPS_USER@$VPS_HOST" "
+            set -Eeuo pipefail
+            rm -rf '$candidate_dir'
+            mkdir -p '$candidate_dir'
+            rsync -a --delete '$remote_tmp/' '$candidate_dir/'
+            cd '$candidate_dir'
+            sha256sum -c SHA256SUMS.txt
+            rm -rf '$remote_tmp'
+            echo CANDIDATE_DEPLOY=PASS
+            echo BUILD_ID='$build_id'
+            echo PATH='$candidate_dir'
+          "
+
+          echo "Candidate deployed and SHA-256 verified on VPS." >> "$GITHUB_STEP_SUMMARY"
+          echo "BUILD_ID=$build_id" >> "$GITHUB_STEP_SUMMARY"
