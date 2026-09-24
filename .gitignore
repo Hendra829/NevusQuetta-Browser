@@ -1,0 +1,4 @@
+*.o
+C-Chromium/build/
+__pycache__/
+nq-test-tmp/

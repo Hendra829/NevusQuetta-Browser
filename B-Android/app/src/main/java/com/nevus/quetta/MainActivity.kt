@@ -327,7 +327,26 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, target.reason, Toast.LENGTH_SHORT).show()
             }
             else -> {
-                val webView = sessions.existing(tabId) ?: return
+                // AUDIT-REPORT.md A-MA-01: sebelum perbaikan, bila WebView tab
+                // tujuan belum dibuat (mis. deep link/intent masuk sebelum
+                // renderState pertama selesai), `sessions.existing()`
+                // mengembalikan null dan navigasi DIABAIKAN tanpa pesan apa pun.
+                // Sekarang sesi dimaterialisasi lebih dulu dari metadata tab.
+                val tab = coordinator.tabs.tab(tabId)
+                val webView = sessions.existing(tabId) ?: tab?.let { pending ->
+                    runCatching {
+                        sessions.obtain(pending) { created ->
+                            configureWebView(pending.id, created)
+                        }
+                    }.getOrNull()
+                }
+                if (webView == null) {
+                    Toast.makeText(this, R.string.page_error, Toast.LENGTH_SHORT).show()
+                    return
+                }
+                // Delegasikan penyimpanan state tab ke coordinator agar satu
+                // sumber kebenaran (bukan mutasi state langsung dari Activity).
+                scope.launch { coordinator.navigate(tabId, target.uri.toString()) }
                 bridgeHosts[tabId]?.prepareFor(target.uri)
                 binding.errorState.visibility = View.GONE
                 webView.loadUrl(target.uri.toString())
@@ -355,9 +374,9 @@ class MainActivity : AppCompatActivity() {
         scope.launch {
             val saved = coordinator.addBookmark(tabId)
             val message = if (saved == null) {
-                "Bookmark tidak disimpan dari tab privat"
+                getString(R.string.bookmark_skipped_private)
             } else {
-                "Bookmark tersimpan"
+                getString(R.string.bookmark_saved)
             }
             Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
         }
@@ -422,7 +441,11 @@ class MainActivity : AppCompatActivity() {
         }
         menu.add(getString(R.string.new_private_tab)).setOnMenuItemClickListener {
             if (!sessions.supportsPrivateProfiles()) {
-                Toast.makeText(this@MainActivity, R.string.private_unsupported, Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    R.string.private_tab_unavailable,
+                    Toast.LENGTH_LONG,
+                ).show()
             } else {
                 scope.launch { coordinator.newTab(isPrivate = true) }
             }
@@ -436,34 +459,34 @@ class MainActivity : AppCompatActivity() {
             showHistory()
             true
         }
-        menu.add("Unduhan").setOnMenuItemClickListener {
+        menu.add(getString(R.string.downloads_action)).setOnMenuItemClickListener {
             showDownloads()
             true
         }
-        menu.add("Metrik performa").setOnMenuItemClickListener {
+        menu.add(getString(R.string.metrics_title)).setOnMenuItemClickListener {
             AlertDialog.Builder(this@MainActivity)
-                .setTitle("V0.9D Performance")
+                .setTitle(R.string.metrics_title)
                 .setMessage(metrics.snapshotText())
                 .setPositiveButton(android.R.string.ok, null)
                 .show()
             true
         }
-        menu.add("Hapus riwayat").setOnMenuItemClickListener {
+        menu.add(getString(R.string.clear_history_action)).setOnMenuItemClickListener {
             scope.launch {
                 coordinator.clearHistory()
-                Toast.makeText(this@MainActivity, "Riwayat dihapus", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, R.string.history_cleared, Toast.LENGTH_SHORT).show()
             }
             true
         }
-        menu.add("Brankas").setOnMenuItemClickListener {
+        menu.add(getString(R.string.vault_action)).setOnMenuItemClickListener {
             val ok = DataVault.isUnlocked() || DataVault.unlock(this@MainActivity)
-            val msg = if (ok) DataVault.lockedSlots(this@MainActivity) else "Vault terkunci"
+            val msg = if (ok) DataVault.lockedSlots(this@MainActivity) else getString(R.string.vault_locked)
             Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
             true
         }
-        menu.add("Kunci brankas").setOnMenuItemClickListener {
+        menu.add(getString(R.string.vault_lock_action)).setOnMenuItemClickListener {
             DataVault.lockNow()
-            Toast.makeText(this@MainActivity, "DEK dihapus dari memori", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, R.string.vault_dek_cleared, Toast.LENGTH_SHORT).show()
             true
         }
         menu.add("Hapus data sesi").setOnMenuItemClickListener {
@@ -540,12 +563,12 @@ class MainActivity : AppCompatActivity() {
         scope.launch {
             val items = downloadCenter.observe().first()
             if (items.isEmpty()) {
-                Toast.makeText(this@MainActivity, "Belum ada unduhan", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, R.string.downloads_empty, Toast.LENGTH_SHORT).show()
                 return@launch
             }
             val labels = items.map(::downloadLabel).toTypedArray()
             AlertDialog.Builder(this@MainActivity)
-                .setTitle("Antrean unduhan")
+                .setTitle(R.string.downloads_title)
                 .setItems(labels) { _, which -> showDownloadActions(items[which]) }
                 .setNegativeButton(R.string.cancel_action, null)
                 .show()

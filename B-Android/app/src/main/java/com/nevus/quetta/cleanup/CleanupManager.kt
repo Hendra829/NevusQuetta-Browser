@@ -1,7 +1,9 @@
 package com.nevus.quetta.cleanup
 
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Path
 
 data class CleanupPolicy(
     val roots: List<File>,
@@ -22,8 +24,8 @@ class CleanupManager(
     allowedRoots: Collection<File>,
 ) {
     private val allowedRoots = allowedRoots
-        .mapNotNull { runCatching { it.canonicalFile }.getOrNull() }
-        .associateBy { it.path }
+        .mapNotNull { runCatching { it.canonicalFile.toPath() }.getOrNull() }
+        .associateBy { it.toString() }
 
     fun run(policy: CleanupPolicy): CleanupReport {
         var scanned = 0
@@ -41,12 +43,17 @@ class CleanupManager(
                 failures += "root-not-allowed:" + root.path
                 return@forEach
             }
+            val rootPath = runCatching { root.canonicalFile.toPath() }.getOrElse {
+                failures += "canonical-root-failed:" + requested.path
+                return@forEach
+            }
             if (!root.exists() || Files.isSymbolicLink(root.toPath())) return@forEach
 
             root.listFiles().orEmpty().forEach { child ->
                 val result = cleanNode(
                     node = child,
-                    root = root,
+                    root = rootPath,
+                    rootFile = root,
                     cutoff = policy.nowMillis - policy.olderThanMillis.coerceAtLeast(0),
                     dryRun = policy.dryRun,
                 )
@@ -63,7 +70,8 @@ class CleanupManager(
 
     private fun cleanNode(
         node: File,
-        root: File,
+        root: Path,
+        rootFile: File,
         cutoff: Long,
         dryRun: Boolean,
     ): CleanupReport {
@@ -81,7 +89,16 @@ class CleanupManager(
         if (canonical.isDirectory) {
             var aggregate = CleanupReport(1, 0, 0, 0, emptyList())
             canonical.listFiles().orEmpty().forEach { child ->
-                aggregate += cleanNode(child, root, cutoff, dryRun)
+                aggregate += cleanNode(child, root, rootFile, cutoff, dryRun)
+            }
+            // Folder kosong yang sudah tua ikut dibersihkan (bounded oleh root yang
+            // diizinkan). Kegagalan tidak menghentikan proses dan dilaporkan.
+            if (!dryRun && aggregate.failures.isEmpty()) {
+                val isOld = canonical.lastModified() in 1..cutoff
+                if (isOld && canonical.listFiles().isNullOrEmpty()) {
+                    runCatching { canonical.delete() }
+                        .onFailure { aggregate += CleanupReport(0, 0, 0, 0, listOf("rmdir-failed:" + canonical.path)) }
+                }
             }
             return aggregate
         }
@@ -99,10 +116,22 @@ class CleanupManager(
         }
     }
 
-    private fun isInside(candidate: File, root: File): Boolean {
-        val rootPath = root.toPath()
-        val candidatePath = candidate.toPath()
-        return candidatePath.startsWith(rootPath) && candidatePath != rootPath
+    /**
+     * Root sudah dalam bentuk canonical/normalized ([Path.toRealPath]).
+     *
+     * Bila root dinormalisasi ulang dengan `File.toPath()`, `java.nio` akan
+     * mengikuti symlink sehingga pemeriksaan ini bisa dinyatakan lolos untuk
+     * berkas yang sebenarnya berada DI LUAR root (regresi yang ditemukan pada
+     * audit; lihat AUDIT-REPORT.md A-CL-01). Karena itu root dibiarkan apa
+     * adanya dan hanya sisi candidate yang dinormalisasi.
+     */
+    private fun isInside(candidate: File, root: Path): Boolean {
+        val candidatePath = try {
+            candidate.toPath().toRealPath()
+        } catch (_: IOException) {
+            return false
+        }
+        return candidatePath.startsWith(root) && candidatePath != root
     }
 
     private operator fun CleanupReport.plus(other: CleanupReport): CleanupReport =

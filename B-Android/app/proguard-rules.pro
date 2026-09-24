@@ -1,7 +1,10 @@
-# WebView JavaScript entrypoints.
--keepclassmembers class com.nevus.quetta.BrowserBridge {
-    @android.webkit.JavascriptInterface <methods>;
-}
+# AUDIT-REPORT.md A-PG-01: aturan lama menyebut class com.nevus.quetta.BrowserBridge
+# yang sudah tidak ada (dihapus saat migrasi ke androidx.webkit WebMessageListener),
+# sehingga tidak melindungi apa pun dan menyembunyikan asumsi lama bahwa bridge
+# masih memakai addJavascriptInterface. Bridge sekarang TIDAK memakai
+# addJavascriptInterface sama sekali; tidak ada entrypoint JS yang perlu dijaga.
+# Bila addJavascriptInterface ditambahkan kembali di masa depan, aturan keep harus
+# ditulis ulang dan disertai pengujian rilis ter-minify.
 
 # JNI symbols referenced by the native guard layer.
 -keep class com.nevus.quetta.NativeGuard { *; }

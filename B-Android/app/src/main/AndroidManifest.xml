@@ -4,8 +4,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- FOREGROUND_SERVICE tipe dataSync di-deklarasikan sekali di elemen service
+         di bawah. Permission FOREGROUND_SERVICE_DATA_SYNC tidak lagi diminta
+         karena aplikasi hanya memakai service WorkManager bawaan (lihat
+         AUDIT-REPORT.md A-MF-01); memintanya hanya memperluas permukaan izin. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <application
         android:name=".NevusApplication"
         android:allowBackup="false"
