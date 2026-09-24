@@ -74,6 +74,15 @@ class BrowserRuntimeViewModelTest {
             canGoBack = false,
             canGoForward = false,
         )
+        advanceTimeBy(25)
+        runCurrent()
+        assertEquals(100, viewModel.uiState.value.progress)
+
+        // Progress must be emitted *after* the page finished and *after* the debounce
+        // window elapsed, otherwise the still-arming debounce fires post-finish and
+        // legitimately overwrites 100 (progressEvents is a buffered SharedFlow, so
+        // every write issued before the virtual clock advances folds into one
+        // debounced emission). Verifying the guard requires an actually-late event.
         viewModel.onProgressChanged(30)
         advanceTimeBy(25)
         runCurrent()
