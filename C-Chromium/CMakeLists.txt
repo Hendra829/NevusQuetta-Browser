@@ -191,8 +191,14 @@ if(NQ_BUILD_TESTS)
         src/nq_sha512.cpp)
     add_executable(nq_ed25519_test tests/nq_ed25519_test.cpp
         src/nq_ed25519.cpp)
+    # Uji integrasi berkas SUNGGUHAN (assets/nevus_ruleset.json). Berkas sumber
+    # ini sudah ada sejak awal, tetapi TARGET-nya tidak pernah didaftarkan di
+    # sini -> biner-nya tidak pernah dibangun dan ctest hanya menjalankan 3 dari
+    # 4 suite. Akibatnya klaim "kebijakan digerakkan ruleset, bukan konstanta di
+    # kode" tidak pernah dibuktikan oleh CI. Kini terdaftar.
+    add_executable(nq_assets_test tests/nq_assets_test.cpp ${NQ_TEST_CORE})
 
-    foreach(t nq_ruleset_test nq_sha512_test nq_ed25519_test)
+    foreach(t nq_ruleset_test nq_sha512_test nq_ed25519_test nq_assets_test)
         target_include_directories(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         target_compile_options(${t} PRIVATE ${NQ_TEST_WARNINGS})
     endforeach()
@@ -205,6 +211,21 @@ if(NQ_BUILD_TESTS)
     add_test(NAME nq_ruleset_test COMMAND nq_ruleset_test)
     add_test(NAME nq_sha512_test COMMAND nq_sha512_test)
     add_test(NAME nq_ed25519_test COMMAND nq_ed25519_test)
+
+    # nq_assets_test butuh DUA hal agar benar-benar hermetik:
+    #   1. argumen eksplisit ke direktori assets -> tidak bergantung direktori
+    #      kerja pemanggil.
+    #   2. direktori kerja sementara yang DIBUAT ULANG oleh uji itu sendiri
+    #      setiap run -> sisa run sebelumnya tidak bisa membuatnya "lulus"
+    #      secara palsu, dan angkanya stabil antar run.
+    # Direktori dibuat di sini supaya ctest selalu punya direktori kerja yang
+    # sah; uji itu sendiri yang membersihkan dan mengisinya ulang.
+    set(NQ_ASSETS_TEST_WORKDIR "${CMAKE_CURRENT_BINARY_DIR}/nq_assets_workdir")
+    file(MAKE_DIRECTORY "${NQ_ASSETS_TEST_WORKDIR}")
+    add_test(NAME nq_assets_test
+        COMMAND nq_assets_test "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+    set_tests_properties(nq_assets_test PROPERTIES
+        WORKING_DIRECTORY "${NQ_ASSETS_TEST_WORKDIR}")
 endif()
 
 # ---------------------------------------------------------------------------
