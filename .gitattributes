@@ -1,0 +1,32 @@
+# Normalisasi line-ending dan penanganan berkas biner.
+#
+# Latar belakang: repo ini berisi skrip shell POSIX (B-Android/gradlew) dan skrip
+# Python/Node yang dijalankan langsung dari checkout. Tanpa berkas ini, checkout di
+# Windows dengan core.autocrlf=true akan menyisipkan CR pada semua berkas teks,
+# sehingga `./gradlew` gagal dengan "bad interpreter: /bin/sh^M" dan skrip lain
+# membawa CR ke dalam arsip rilis.
+#
+# Default: kurangi seluruh berkas teks ke LF di repository.
+* text=auto eol=lf
+
+# Skrip shell POSIX harus tetap LF dan tetap executable (mode 100755).
+*.sh            text eol=lf
+gradlew         text eol=lf
+gradlew.bat     text eol=crlf
+
+# Berkas biner harus dibiarkan apa adanya agar tidak rusak oleh translasi.
+*.jar           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.webp          binary
+*.ico           binary
+*.pdf           binary
+*.zip           binary
+*.keystore      binary
+*.jks           binary
+
+# Aset teks yang sensitif terhadap representasi byte persis.
+*.sha256        text eol=lf
+*.json          text eol=lf
