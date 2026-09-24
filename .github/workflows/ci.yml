@@ -29,20 +29,36 @@ jobs:
         run: |
           if [ -f package.json ]; then
             echo "has_package_json=true" >> "$GITHUB_OUTPUT"
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              echo "has_npm_lockfile=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "has_npm_lockfile=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "has_package_json=false" >> "$GITHUB_OUTPUT"
+            echo "has_npm_lockfile=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Setup Node.js
-        if: steps.detect.outputs.has_package_json == 'true'
+      - name: Setup Node.js (with npm cache)
+        if: steps.detect.outputs.has_package_json == 'true' && steps.detect.outputs.has_npm_lockfile == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        if: steps.detect.outputs.has_package_json == 'true'
+      - name: Setup Node.js (without npm cache)
+        if: steps.detect.outputs.has_package_json == 'true' && steps.detect.outputs.has_npm_lockfile != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies (npm ci)
+        if: steps.detect.outputs.has_package_json == 'true' && steps.detect.outputs.has_npm_lockfile == 'true'
         run: npm ci
+
+      - name: Install dependencies (npm install)
+        if: steps.detect.outputs.has_package_json == 'true' && steps.detect.outputs.has_npm_lockfile != 'true'
+        run: npm install
 
       - name: Run tests
         if: steps.detect.outputs.has_package_json == 'true'
