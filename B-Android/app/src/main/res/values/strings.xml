@@ -24,4 +24,22 @@
     <string name="download_media_title">Media terdeteksi</string>
     <string name="download_action">Unduh</string>
     <string name="cancel_action">Batal</string>
+    <string name="close_action">Tutup</string>
+    <string name="downloads_title">Antrean unduhan</string>
+    <string name="no_downloads">Belum ada unduhan</string>
+    <string name="download_pause">Jeda</string>
+    <string name="download_resume">Lanjutkan</string>
+    <string name="download_cancel">Batalkan</string>
+    <string name="download_retry">Coba lagi</string>
+    <string name="download_remove_entry">Hapus dari daftar</string>
+    <string name="download_paused">Unduhan dijeda</string>
+    <string name="download_canceled">Unduhan dibatalkan</string>
+    <string name="download_entry_removed">Entri unduhan dibersihkan</string>
+    <string name="download_action_failed">Aksi unduhan tidak dapat dijalankan</string>
+    <string name="performance_title">Metrik performa</string>
+    <string name="clear_history_action">Hapus riwayat</string>
+    <string name="history_cleared">Riwayat dihapus</string>
+    <string name="vault_action">Brankas</string>
+    <string name="vault_lock_action">Kunci brankas</string>
+    <string name="downloads_action">Unduhan</string>
 </resources>

@@ -3,6 +3,7 @@ package com.nevus.quetta.data
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
@@ -18,6 +19,15 @@ interface BrowserDao {
     @Query("SELECT * FROM tabs ORDER BY position ASC")
     fun observeTabs(): Flow<List<TabEntity>>
 
+    @Query("SELECT * FROM downloads ORDER BY updatedAt DESC")
+    fun observeDownloads(): Flow<List<DownloadEntity>>
+
+    @Query("SELECT * FROM downloads WHERE downloadId = :downloadId LIMIT 1")
+    suspend fun downloadById(downloadId: String): DownloadEntity?
+
+    @Query("SELECT * FROM downloads WHERE systemDownloadId = :systemId LIMIT 1")
+    suspend fun downloadBySystemId(systemId: Long): DownloadEntity?
+
     @Query("SELECT * FROM bookmarks WHERE normalizedUrl = :normalizedUrl LIMIT 1")
     suspend fun bookmarkByNormalizedUrl(normalizedUrl: String): BookmarkEntity?
 
@@ -32,6 +42,68 @@ interface BrowserDao {
 
     @Insert
     suspend fun insertHistory(history: HistoryEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDownload(download: DownloadEntity)
+
+    @Query(
+        """
+        UPDATE downloads
+        SET status = :status,
+            bytesDownloaded = :bytesDownloaded,
+            totalBytes = :totalBytes,
+            localUri = :localUri,
+            errorCode = :errorCode,
+            updatedAt = :updatedAt
+        WHERE downloadId = :downloadId
+        """,
+    )
+    suspend fun updateDownloadProgress(
+        downloadId: String,
+        status: String,
+        bytesDownloaded: Long,
+        totalBytes: Long,
+        localUri: String?,
+        errorCode: String?,
+        updatedAt: Long,
+    )
+
+    @Query(
+        """
+        UPDATE downloads
+        SET supportsResume = :supportsResume,
+            etag = :etag,
+            lastModified = :lastModified,
+            totalBytes = :totalBytes,
+            updatedAt = :updatedAt
+        WHERE downloadId = :downloadId
+        """,
+    )
+    suspend fun updateDownloadResumeMetadata(
+        downloadId: String,
+        supportsResume: Boolean,
+        etag: String?,
+        lastModified: String?,
+        totalBytes: Long,
+        updatedAt: Long,
+    )
+
+    @Query(
+        """
+        UPDATE downloads
+        SET sha256 = :sha256,
+            updatedAt = :updatedAt
+        WHERE downloadId = :downloadId
+        """,
+    )
+    suspend fun updateDownloadDigest(
+        downloadId: String,
+        sha256: String,
+        updatedAt: Long,
+    )
+
+    @Query("DELETE FROM downloads WHERE downloadId = :downloadId")
+    suspend fun deleteDownload(downloadId: String)
 
     @Query("DELETE FROM history")
     suspend fun clearHistory()

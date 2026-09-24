@@ -1,25 +1,30 @@
-name: Android V0.9AB Runtime Matrix
+name: Android V0.9CD Runtime Matrix
 
 on:
-  pull_request:
-    branches: ["feat/v09ab"]
+  push:
+    branches: ["feat/v09cd"]
     paths:
       - "B-Android/**"
-      - ".github/workflows/android-v09ab-runtime.yml"
+      - ".github/workflows/android-v09cd-runtime.yml"
+  pull_request:
+    branches: ["feat/v09ab-hardening", "main"]
+    paths:
+      - "B-Android/**"
+      - ".github/workflows/android-v09cd-runtime.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-v09ab-runtime-${{ github.ref }}
+  group: android-v09cd-runtime-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   runtime-gate:
     name: runtime-api-${{ matrix.api }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 95
     strategy:
       fail-fast: false
       matrix:
@@ -48,27 +53,20 @@ jobs:
 
       - name: Reclaim hosted-runner disk safely
         run: |
-          echo "=== disk before cleanup ==="
           df -h /
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift || true
           docker system prune -af --volumes || true
           sudo apt-get clean
-          echo "=== disk after cleanup ==="
           df -h /
 
       - name: Install compile SDK and native toolchain
         run: |
           sdkmanager_bin="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$sdkmanager_bin" --licenses >/dev/null
-          "$sdkmanager_bin" \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0" \
-            "ndk;27.2.12479018" \
-            "cmake;3.22.1"
+          "$sdkmanager_bin"             "platform-tools"             "platforms;android-36"             "build-tools;36.0.0"             "ndk;27.2.12479018"             "cmake;3.22.1"
 
-      - name: Run real emulator runtime gate
-        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+      - name: Run V0.9CD emulator runtime gate
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: ${{ matrix.api }}
           target: google_apis
@@ -96,7 +94,7 @@ jobs:
             fi
           done
 
-      - name: Print fatal diagnostics on failure
+      - name: Print diagnostics on failure
         if: failure()
         run: |
           for f in B-Android/runtime-api-*/logcat.txt B-Android/runtime-api-*/exit-info.txt B-Android/runtime-api-*/last-anr.txt; do
