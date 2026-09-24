@@ -1,44 +1,62 @@
-# NevusQuetta Chromium (CEF) — skeleton konfigurasi build.
+# NevusQuetta Chromium (CEF).
 #
-# STATUS: KONFIGURASI SAJA. Belum pernah dikompilasi — lingkungan penyusunan
-# tidak memiliki toolchain CEF/Chromium (tidak ada CMake, Ninja, clang, maupun
-# distribusi biner CEF). Lihat README-BUILD.md bagian "Status verifikasi".
+# DUA MODE:
 #
-# Target: aplikasi desktop berbasis CEF (Chromium Embedded Framework) dengan
-# branding clean-room, mengikuti spesifikasi docs/superpowers/specs/
-# 2026-09-19-nevusquetta-v09-chromium-design.md §9 (M01–M04).
+#   1. Aplikasi penuh (butuh distribusi biner CEF):
+#        cmake -S C-Chromium -B C-Chromium/build -DCEF_ROOT=/path/ke/cef_binary_xxx
+#        cmake --build C-Chromium/build --config Release
+#      Prasyarat CEF diperiksa gagal-keras (lihat blok di bawah).
 #
-# Cara pakai:
-#   cmake -S C-Chromium -B C-Chromium/build -DCEF_ROOT=/path/ke/cef_binary_xxx
-#   cmake --build C-Chromium/build --config Release
+#   2. Modul + uji mandiri TANPA CEF (dapat dijalankan di CI biasa):
+#        cmake -S C-Chromium -B C-Chromium/build
+#        cmake --build C-Chromium/build
+#        ctest --test-dir C-Chromium/build --output-on-failure
+#      Seluruh modul keamanan (JSON, SHA-256/512, ruleset, kebijakan privasi,
+#      Ed25519, bootstrap) tidak menyertakan header CEF, sehingga kebijakan
+#      privasi dapat diverifikasi tanpa Chromium sekalipun.
+#
+# Target: aplikasi desktop berbasis CEF dengan branding clean-room, mengikuti
+# spesifikasi docs/superpowers/specs/2026-09-19-nevusquetta-v09-chromium-design.md
+# §9 (M01-M04).
 #
 cmake_minimum_required(VERSION 3.22.1)
 project(NevusQuettaChromium VERSION 0.9.0 LANGUAGES CXX)
 
 # ---------------------------------------------------------------------------
-# Pemeriksaan prasyarat — gagal-keras, bukan diam-diam memakai default
+# Mode build
 # ---------------------------------------------------------------------------
-if(NOT DEFINED CEF_ROOT)
-    message(FATAL_ERROR
-        "CEF_ROOT belum diset. Unduh distribusi biner CEF dari "
-        "https://cef-builds.spotifycdn.com/index.html lalu jalankan cmake dengan "
-        "-DCEF_ROOT=<dir hasil ekstrak>. Lihat README-BUILD.md.")
+# Target aplikasi (dan karenanya prasyarat CEF) hanya disusun bila CEF_ROOT
+# diberikan. Tanpa CEF_ROOT, konfigurasi tetap BERHASIL dan hanya menghasilkan
+# target uji mandiri. Ini menghindari CI biasa gagal hanya karena tidak ada
+# distribusi CEF, tanpa melonggarkan syarat apa pun saat CEF_ROOT memang dipakai.
+set(NQ_BUILD_CEF_APP OFF)
+if(DEFINED CEF_ROOT AND NOT CEF_ROOT STREQUAL "")
+    set(NQ_BUILD_CEF_APP ON)
 endif()
 
-if(NOT EXISTS "${CEF_ROOT}/cmake/cef_variables.cmake")
-    message(FATAL_ERROR
-        "CEF_ROOT='${CEF_ROOT}' tidak berisi cmake/cef_variables.cmake. "
-        "Direktori ini bukan distribusi biner CEF yang lengkap.")
-endif()
+# ---------------------------------------------------------------------------
+# Pemeriksaan prasyarat CEF — gagal-keras, bukan diam-diam memakai default
+# ---------------------------------------------------------------------------
+if(NQ_BUILD_CEF_APP)
+    if(NOT EXISTS "${CEF_ROOT}/cmake/cef_variables.cmake")
+        message(FATAL_ERROR
+            "CEF_ROOT='${CEF_ROOT}' tidak berisi cmake/cef_variables.cmake. "
+            "Direktori ini bukan distribusi biner CEF yang lengkap.")
+    endif()
 
-# Modul CMake resmi dari distribusi CEF.
-list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
-include(cef_variables)
+    # Modul CMake resmi dari distribusi CEF.
+    list(APPEND CMAKE_MODULE_PATH "${CEF_ROOT}/cmake")
+    include(cef_variables)
 
-if(CEF_VERSION_MAJOR LESS 120)
-    message(FATAL_ERROR
-        "CEF ${CEF_VERSION} terlalu lama. Proyek menargetkan CEF >= 120 agar "
-        "WebView/WebMessageListener dan GPC dapat diimplementasikan.")
+    if(CEF_VERSION_MAJOR LESS 120)
+        message(FATAL_ERROR
+            "CEF ${CEF_VERSION} terlalu lama. Proyek menargetkan CEF >= 120 agar "
+            "WebView/WebMessageListener dan GPC dapat diimplementasikan.")
+    endif()
+else()
+    message(STATUS
+        "CEF_ROOT tidak diset -> HANYA target modul & uji mandiri yang dibangun. "
+        "Set -DCEF_ROOT=<dir CEF> untuk membangun aplikasi penuh.")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -65,19 +83,34 @@ set(NQ_SOURCES
     src/cef_app_main.cpp
     src/nevus_app.cpp
     src/nevus_client.cpp
+    src/nq_bootstrap.cpp
+    src/nq_ed25519.cpp
+    src/nq_json.cpp
     src/nq_privacy_policy.cpp
+    src/nq_ruleset.cpp
+    src/nq_sha256.cpp
+    src/nq_sha512.cpp
 )
 
 set(NQ_HEADERS
     src/nevus_app.h
     src/nevus_client.h
+    src/nq_bootstrap.h
+    src/nq_ed25519.h
+    src/nq_ed25519_constants.h
+    src/nq_json.h
     src/nq_privacy_policy.h
+    src/nq_ruleset.h
+    src/nq_sha256.h
+    src/nq_sha512.h
+    src/nq_sha512_constants.h
     src/nq_version.h
 )
 
 # ---------------------------------------------------------------------------
-# Target — pola resmi CEF (PREFIX/SUFFIX dari cef_variables.cmake)
+# Target aplikasi — hanya bila CEF tersedia (pola resmi CEF)
 # ---------------------------------------------------------------------------
+if(NQ_BUILD_CEF_APP)
 add_executable(${PROJECT_NAME} ${NQ_SOURCES} ${NQ_HEADERS}
     ${CEF_STANDARD_SOURCES})
 
@@ -126,6 +159,53 @@ foreach(res IN LISTS CEF_RESOURCE_FILES)
             VERBATIM)
     endif()
 endforeach()
+endif()  # NQ_BUILD_CEF_APP
+
+# ---------------------------------------------------------------------------
+# Target uji mandiri — TIDAK membutuhkan CEF
+# ---------------------------------------------------------------------------
+# Seluruh modul keamanan (JSON, SHA-256/512, ruleset, kebijakan privasi,
+# Ed25519, bootstrap) sengaja tidak menyertakan header CEF, sehingga dapat
+# dikompilasi dan dijalankan tanpa distribusi CEF. Inilah yang membuat
+# kebijakan privasi dapat diverifikasi di CI biasa.
+#
+#   cmake -S C-Chromium -B C-Chromium/build
+#   cmake --build C-Chromium/build --target nq_ruleset_test nq_sha512_test nq_ed25519_test
+#   ctest --test-dir C-Chromium/build --output-on-failure
+option(NQ_BUILD_TESTS "Bangun target uji mandiri (tanpa CEF)" ON)
+
+if(NQ_BUILD_TESTS)
+    set(NQ_TEST_CORE
+        src/nq_bootstrap.cpp
+        src/nq_ed25519.cpp
+        src/nq_json.cpp
+        src/nq_privacy_policy.cpp
+        src/nq_ruleset.cpp
+        src/nq_sha256.cpp
+        src/nq_sha512.cpp
+    )
+    set(NQ_TEST_WARNINGS $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Werror>)
+
+    add_executable(nq_ruleset_test tests/nq_ruleset_test.cpp ${NQ_TEST_CORE})
+    add_executable(nq_sha512_test tests/nq_sha512_quick_test.cpp
+        src/nq_sha512.cpp)
+    add_executable(nq_ed25519_test tests/nq_ed25519_test.cpp
+        src/nq_ed25519.cpp)
+
+    foreach(t nq_ruleset_test nq_sha512_test nq_ed25519_test)
+        target_include_directories(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        target_compile_options(${t} PRIVATE ${NQ_TEST_WARNINGS})
+    endforeach()
+
+    # CATATAN: tidak ada add_test yang mengandalkan flag khusus di sini. Biner
+    # uji sudah menjalankan jalur gagal-keras di dalam dirinya sendiri; menambah
+    # add_test dengan argumen yang tidak dikenali biner hanya akan menghasilkan
+    # kegagalan palsu di CI.
+    enable_testing()
+    add_test(NAME nq_ruleset_test COMMAND nq_ruleset_test)
+    add_test(NAME nq_sha512_test COMMAND nq_sha512_test)
+    add_test(NAME nq_ed25519_test COMMAND nq_ed25519_test)
+endif()
 
 # ---------------------------------------------------------------------------
 # Ringkasan konfigurasi (memudahkan audit bukti build)
@@ -133,8 +213,12 @@ endforeach()
 message(STATUS "NevusQuetta Chromium")
 message(STATUS "  produk      : ${NQ_PRODUCT_NAME} (${NQ_PACKAGE})")
 message(STATUS "  versi       : ${NQ_VERSION_MAJOR}.${NQ_VERSION_MINOR}.${NQ_VERSION_PATCH}")
-message(STATUS "  cef root    : ${CEF_ROOT}")
-message(STATUS "  cef versi   : ${CEF_VERSION}")
+if(NQ_BUILD_CEF_APP)
+    message(STATUS "  cef root    : ${CEF_ROOT}")
+    message(STATUS "  cef versi   : ${CEF_VERSION}")
+else()
+    message(STATUS "  cef         : TIDAK ADA (mode modul & uji mandiri)")
+endif()
 message(STATUS "  ruleset     : ${NQ_BLOCKED_HOSTS_ASSET}")
 if(NOT NQ_ALLOW_UNSIGNED_RULESET)
     message(STATUS "  ruleset unsigned: DITOLAK (build rilis)")

@@ -3,6 +3,7 @@
 #include "include/cef_client.h"
 #include "include/cef_request_handler.h"
 
+#include <string>
 #include <vector>
 
 namespace nq {
@@ -17,6 +18,17 @@ class NevusRequestHandler : public CefRequestHandler {
                       CefRefPtr<CefRequest> request,
                       bool user_gesture,
                       bool is_redirect) override;
+
+  // True bila URL harus diblokir menurut kebijakan aktif. Memakai daftar host
+  // dari ruleset (bukan konstanta di kode). Gagal-tertutup: URL yang tidak
+  // dapat dinilai TIDAK diblokir di sini, karena pemblokiran berbasis host
+  // hanya berlaku untuk permintaan jaringan yang dapat dinilai.
+  static bool IsBlocked(const std::string& url);
+
+  // True bila gabungan skema dianggap penurunan keamanan yang harus dicegah
+  // (sub-sumber daya http:// dari permintaan https://, atau navigasi http://).
+  static bool IsInsecureDowngrade(const std::string& top_level_url,
+                                  const std::string& subresource_url);
 
   CefRefPtr<CefResourceRequestHandler> GetResourceRequestHandler(
       CefRefPtr<CefBrowser> browser,

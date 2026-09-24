@@ -10,6 +10,23 @@ namespace nq {
 // ---------------------------------------------------------------------------
 // NevusRequestHandler
 // ---------------------------------------------------------------------------
+bool NevusRequestHandler::IsBlocked(const std::string& url) {
+  // Satu-satunya sumber kebenaran: kebijakan yang berasal dari ruleset.
+  return PrivacyPolicy::IsBlockedHost(url);
+}
+
+bool NevusRequestHandler::IsInsecureDowngrade(
+    const std::string& top_level_url, const std::string& subresource_url) {
+  // Penurunan https -> http adalah persis yang dicegah kebijakan. Dihitung dari
+  // kebijakan aktif, bukan dari konstanta yang ditanam di kode.
+  if (!PrivacyPolicy::IsAllowedTopLevelScheme(top_level_url)) return true;
+  if (PrivacyPolicy::IsAllowedTopLevelScheme(subresource_url) &&
+      !PrivacyPolicy::IsAllowedSubresourceScheme(subresource_url)) {
+    return true;
+  }
+  return false;
+}
+
 bool NevusRequestHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                                          CefRefPtr<CefFrame> frame,
                                          CefRefPtr<CefRequest> request,
@@ -18,11 +35,18 @@ bool NevusRequestHandler::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
   CEF_REQUIRE_UI_THREAD();
   const std::string url = request->GetURL().ToString();
 
-  // HTTPS-first: hanya navigasi tingkat-atas HTTPS yang diteruskan. Selain itu
-  // (mis. http://, file://) ditolak di sini, bukan diserahkan ke pembuat request.
-  if (frame->IsMain() && !PrivacyPolicy::IsAllowedTopLevelScheme(url)) {
+  // 1. Host terblokir dibatalkan SEBELUM keluar jaringan. Berlaku untuk semua
+  //    frame: sub-frame yang memuat pelacak tetap harus diblokir.
+  if (IsBlocked(url)) {
     return true;  // true = batalkan navigasi
   }
+
+  // 2. HTTPS-only untuk navigasi tingkat-atas. http://, file://, dan skema
+  //    lokal lain ditolak di sini, bukan diserahkan ke pembuat request.
+  if (frame->IsMain() && !PrivacyPolicy::IsAllowedTopLevelScheme(url)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -62,16 +86,34 @@ NevusResourceRequestHandler::OnBeforeResourceLoad(
   const std::string url = request->GetURL().ToString();
 
   // Adblock/tracker: blokir sebelum keluar jaringan.
-  if (PrivacyPolicy::IsBlockedHost(url)) {
+  if (IsBlocked(url)) {
+    return RV_CANCEL;
+  }
+
+  // Skema: sub-sumber daya yang tidak diizinkan kebijakan dibatalkan. Ini juga
+  // mencegah mixed-content http:// dari halaman https://.
+  if (!PrivacyPolicy::IsAllowedSubresourceScheme(url)) {
     return RV_CANCEL;
   }
 
   // Global Privacy Control pada setiap permintaan (bukan hanya navigasi).
-  CefRequest::HeaderMap headers;
-  request->GetHeaderMap(headers);
-  if (headers.find("Sec-GPC") == headers.end()) {
-    headers.insert(std::make_pair("Sec-GPC", "1"));
-    request->SetHeaderMap(headers);
+  // Diambil dari kebijakan, sehingga ruleset dapat mematikannya bila kelak
+  // diizinkan; sekarang bernilai true dan header selalu disuntikkan.
+  const std::string gpc = PrivacyPolicy::GlobalPrivacyControlHeader();
+  if (!gpc.empty()) {
+    const std::string::size_type colon = gpc.find(':');
+    if (colon != std::string::npos) {
+      const std::string name = gpc.substr(0, colon);
+      std::string value = gpc.substr(colon + 1);
+      while (!value.empty() && value.front() == ' ') value.erase(0, 1);
+      CefRequest::HeaderMap headers;
+      request->GetHeaderMap(headers);
+      // Timpa bila sudah ada: nilai yang datang dari halaman tidak boleh
+      // mengalahkan kebijakan aplikasi.
+      headers.erase(name);
+      headers.insert(std::make_pair(name, value));
+      request->SetHeaderMap(headers);
+    }
   }
 
   return RV_CONTINUE;
@@ -87,10 +129,26 @@ bool NevusPermissionHandler::OnRequestMediaAccessPermission(
     uint32_t requested_permissions,
     CefRefPtr<CefMediaAccessCallback> callback) {
   CEF_REQUIRE_UI_THREAD();
-  // Tolak tanpa menyimpan keputusan: pengguna harus menyetujui ulang setiap
-  // kali, mencegah "izin lengket" yang tak sengaja.
-  callback->Cancel();
-  return true;
+
+  // Kebijakan dari ruleset menentukan apakah izin boleh mengalir tanpa
+  // interaksi. Ruleset saat ini hanya boleh memperketat (lihat
+  // kPolicyRelaxationRejected di nq_ruleset.cpp), jadi nilainya selalu true;
+  // cabang longgar tetap dijaga agar perubahan kebijakan tidak diam-diam
+  // membuka izin.
+  //
+  // Gagal-tertutup: nilai bitmask izin yang tidak dikenali pun berakhir di
+  // cabang default -> DITOLAK.
+  if (PrivacyPolicy::IsPermissionDeniedByDefault(
+          static_cast<int>(requested_permissions))) {
+    callback->Cancel();
+    return true;
+  }
+
+  // Belum ada jalur ini yang aktif. Dibiarkan eksplisit supaya pembaca kode
+  // tidak menyimpulkan bahwa izin lain (geolokasi, notifikasi, klipboar)
+  // sudah ditangani — CEF menyalurkannya lewat callback lain yang belum
+  // dipasang.
+  return false;
 }
 
 // ---------------------------------------------------------------------------

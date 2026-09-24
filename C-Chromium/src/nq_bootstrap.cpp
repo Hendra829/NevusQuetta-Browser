@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "nq_ed25519.h"
 #include "nq_privacy_policy.h"
 
 namespace nq {
@@ -72,7 +73,18 @@ BootstrapDecision PlanBootstrap(const BootstrapOptions& options) {
 
   RulesetLoadOptions load_options;
   load_options.allow_unsigned = options.allow_unsigned;
-  load_options.verifier = options.verifier;
+  // Verifier bawaan SELALU terpasang. Sebelumnya nullptr membuat build tanpa
+  // verifier menolak ruleset bertanda tangan dengan "algoritma tidak didukung",
+  // yang menyesatkan: algoritmanya didukung, implementasinya yang belum ada.
+  //
+  // Verifier ini kini terpasang dan menyatakan dirinya gagal lewat
+  // Ed25519SelfTest() == false, sehingga penolakan terjadi di jalur
+  // kSignatureInvalid yang benar dan dapat dibedakan operator.
+  //
+  // Verifier yang disediakan pemanggil (mis. libsodium) tetap menang.
+  static const Ed25519RulesetVerifier kDefaultEd25519Verifier;
+  load_options.verifier = options.verifier != nullptr ? options.verifier
+                                                     : &kDefaultEd25519Verifier;
   load_options.public_key = options.public_key;
   load_options.checksum_path = options.checksum_path;
 
