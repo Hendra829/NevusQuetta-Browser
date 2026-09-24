@@ -26,57 +26,76 @@ object DataVault {
 
     enum class Slot { HISTORY, FAVORITES, DOWNLOADS, PLAYLIST }
 
+    private val stateLock = Any()
+
     @Volatile
     private var dek: ByteArray? = null
 
-    fun isUnlocked(): Boolean = dek != null
+    fun isUnlocked(): Boolean = synchronized(stateLock) { dek != null }
 
     fun lockNow() {
-        dek?.fill(0)
-        dek = null
+        synchronized(stateLock) {
+            dek?.fill(0)
+            dek = null
+        }
     }
 
-    fun unlock(context: Context): Boolean {
-        val wrapped = prefs(context).getString("wrappedDek", null) ?: return bootstrap(context)
+    fun unlock(context: Context): Boolean = synchronized(stateLock) {
+        val wrapped = prefs(context).getString("wrappedDek", null) ?: return bootstrapLocked(context)
         val nonceB64 = prefs(context).getString("wrapNonce", null) ?: return false
-        return runCatching {
+        runCatching {
+            val nonce = b64(nonceB64)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, kek(create = false), GCMParameterSpec(GCM_TAG_BITS, b64(nonceB64)))
-            cipher.updateAAD("${AAD_PREFIX}dek".toByteArray())
-            dek = cipher.doFinal(b64(wrapped))
+            cipher.init(Cipher.DECRYPT_MODE, kek(create = false), GCMParameterSpec(GCM_TAG_BITS, nonce))
+            cipher.updateAAD((AAD_PREFIX + "dek").toByteArray())
+            val raw = cipher.doFinal(b64(wrapped))
+            require(raw.size == 32)
+            dek?.fill(0)
+            dek = raw
             true
         }.getOrElse { false }
     }
 
     fun put(context: Context, slot: Slot, plaintext: String): Boolean {
-        val key = dek ?: return false
-        val nonce = ByteArray(NONCE_BYTES).also { java.security.SecureRandom().nextBytes(it) }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
-        cipher.updateAAD("$AAD_PREFIX${slot.name}".toByteArray())
-        val packed = nonce + cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
-        prefs(context).edit().putString("slot_${slot.name}", b64s(packed)).apply()
-        return true
+        val key = snapshotKey() ?: return false
+        return try {
+            val nonce = ByteArray(NONCE_BYTES).also { java.security.SecureRandom().nextBytes(it) }
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
+            cipher.updateAAD((AAD_PREFIX + slot.name).toByteArray())
+            val packed = nonce + cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+            prefs(context).edit().putString("slot_" + slot.name, b64s(packed)).apply()
+            true
+        } catch (_: Exception) {
+            false
+        } finally {
+            key.fill(0)
+        }
     }
 
     fun get(context: Context, slot: Slot): String? {
-        val key = dek ?: return null
-        val packed = b64(prefs(context).getString("slot_${slot.name}", null) ?: return null)
-        if (packed.size <= NONCE_BYTES) return null
-        val nonce = packed.copyOfRange(0, NONCE_BYTES)
-        val body = packed.copyOfRange(NONCE_BYTES, packed.size)
-        return runCatching {
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
-            cipher.updateAAD("$AAD_PREFIX${slot.name}".toByteArray())
-            String(cipher.doFinal(body), Charsets.UTF_8)
-        }.getOrNull()
+        val key = snapshotKey() ?: return null
+        return try {
+            runCatching {
+                val raw = prefs(context).getString("slot_" + slot.name, null) ?: return@runCatching null
+                val packed = b64(raw)
+                if (packed.size <= NONCE_BYTES) return@runCatching null
+                val nonce = packed.copyOfRange(0, NONCE_BYTES)
+                val body = packed.copyOfRange(NONCE_BYTES, packed.size)
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, nonce))
+                cipher.updateAAD((AAD_PREFIX + slot.name).toByteArray())
+                String(cipher.doFinal(body), Charsets.UTF_8)
+            }.getOrNull()
+        } finally {
+            key.fill(0)
+        }
     }
 
     fun lockedSlots(context: Context): String {
         val names = JSONArray()
         Slot.values().forEach { slot ->
-            if (prefs(context).contains("slot_${slot.name}")) names.put(slot.name)
+            if (prefs(context).contains("slot_" + slot.name)) names.put(slot.name)
         }
         return JSONObject()
             .put("version", VERSION)
@@ -86,20 +105,28 @@ object DataVault {
             .toString()
     }
 
-    private fun bootstrap(context: Context): Boolean {
+    private fun snapshotKey(): ByteArray? = synchronized(stateLock) { dek?.copyOf() }
+
+    private fun bootstrapLocked(context: Context): Boolean {
         val raw = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
         val nonce = ByteArray(NONCE_BYTES).also { java.security.SecureRandom().nextBytes(it) }
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, kek(create = true), GCMParameterSpec(GCM_TAG_BITS, nonce))
-        cipher.updateAAD("${AAD_PREFIX}dek".toByteArray())
-        val wrapped = cipher.doFinal(raw)
-        prefs(context).edit()
-            .putString("wrappedDek", b64s(wrapped))
-            .putString("wrapNonce", b64s(nonce))
-            .putInt("version", VERSION)
-            .apply()
-        dek = raw
-        return true
+        return runCatching {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, kek(create = true), GCMParameterSpec(GCM_TAG_BITS, nonce))
+            cipher.updateAAD((AAD_PREFIX + "dek").toByteArray())
+            val wrapped = cipher.doFinal(raw)
+            prefs(context).edit()
+                .putString("wrappedDek", b64s(wrapped))
+                .putString("wrapNonce", b64s(nonce))
+                .putInt("version", VERSION)
+                .apply()
+            dek?.fill(0)
+            dek = raw
+            true
+        }.getOrElse {
+            raw.fill(0)
+            false
+        }
     }
 
     private fun kek(create: Boolean): SecretKey {
