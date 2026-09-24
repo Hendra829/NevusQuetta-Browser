@@ -8,7 +8,13 @@
 // Penggunaan:
 //   ./nq_assets_test [direktori-assets]
 // Default: "assets" relatif ke direktori kerja (jalankan dari C-Chromium/).
+//
+// Hermetik: uji ini membuat ULANG direktori kerja sementaranya sendiri setiap
+// run, jadi hasilnya tidak bergantung pada sisa run sebelumnya dan angkanya
+// stabil. Dijalankan lewat ctest, ia selalu menerima direktori assets
+// eksplisit sehingga tidak bergantung pada direktori kerja pemanggil.
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -46,6 +52,22 @@ bool ReadFile(const std::string& path, std::string* out) {
   return true;
 }
 
+// Membuat ulang direktori sementara dari nol.
+//
+// Kenapa ini wajib: versi sebelumnya HANYA menulis ke "nq-assets-tmp" tanpa
+// pernah membuat direktori itu. Bila direktori belum ada -- yaitu setiap clone
+// bersih di CI -- seluruh penulisan gagal, WriteFile() mengembalikan false TANPA
+// dilaporkan, dan uji jalur 4b-4g melaporkan status yang salah (kMissing alih-
+// alih status yang diharapkan). Lebih buruk, uji itu lalu "lulus" hanya karena
+// ada sisa direktori dari run sebelumnya: tidak hermetik dan tidak bisa
+// dipercaya. Karena itu ruang kerja dibuat ulang di sini, setiap run.
+bool ResetTmpDir(const std::string& dir) {
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  std::filesystem::create_directories(dir, ec);
+  return std::filesystem::is_directory(dir, ec);
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -56,6 +78,14 @@ int main(int argc, char* argv[]) {
 
   std::printf("== Uji integrasi assets (jalur SUNGGUHAN) ==\n");
   std::printf("  berkas: %s\n", ruleset.c_str());
+
+  // Harness menyiapkan ruang kerjanya sendiri; tidak boleh bergantung sisa run
+  // sebelumnya maupun pada direktori yang kebetulan sudah ada.
+  if (!ResetTmpDir(tmp_dir)) {
+    std::printf("  GAGAL tidak dapat membuat direktori sementara '%s'\n",
+                tmp_dir.c_str());
+    return 1;
+  }
 
   std::string text;
   if (!ReadFile(ruleset, &text)) {
@@ -176,10 +206,13 @@ int main(int argc, char* argv[]) {
     }
     // 4b. Sidecar hilang.
     {
-      if (!WriteFile(tmp_dir + "/nosidecar.json", text)) {
-        std::printf("  GAGAL tidak dapat menulis berkas uji sementara\n");
-        ++g_fail;
-      } else {
+      // Pola pemeriksaan konsisten: kegagalan penulisan pun dihitung lewat
+      // Check() sehingga g_total dan g_fail selalu sepasang. Versi lama
+      // menaikkan g_fail sendirian di sini -- itulah sebabnya jumlah akhirnya
+      // berbeda antar run (42 vs 43).
+      Check(WriteFile(tmp_dir + "/nosidecar.json", text),
+            "menulis berkas uji sementara (sidecar)");
+      {
         nq::RulesetLoadOptions options;  // rilis: checksum wajib
         const nq::RulesetLoadResult r =
             nq::LoadRulesetFromFile(tmp_dir + "/nosidecar.json", options);
