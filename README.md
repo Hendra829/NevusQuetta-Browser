@@ -29,8 +29,7 @@ Repositori ini juga berisi fondasi awal aplikasi Android native **NevusQuetta Br
   - `currentUrl`
   - `progress`
 - `NevusQuettaWebViewClient` dan `NevusQuettaWebChromeClient` hanya meneruskan event engine ke `BrowserViewModel`, sehingga callback WebView tidak mengikat UI secara langsung.
-- Event `progress` dan `URL` diproses dengan `debounce` / `distinctUntilChanged` untuk menekan update berlebih saat redirect chain atau progress callback yang sangat sering.
-- `progressEvents` memakai `replay = 1` agar nilai progress terakhir tetap tersedia bila callback WebView sudah memanggil `onProgressChanged()` sebelum collector di `init` sempat berlangganan.
+- Event `progress` dan `URL` diproses dengan `debounce` / `distinctUntilChanged` untuk menekan update berlebih saat redirect chain atau progress callback yang sangat sering. Debounce progress memakai pola *cancel-and-delay* agar tidak ada event yang hilang di buffer.
 - Tombol **Reload / Stop** memakai satu handler (`onReloadStopClicked`) agar keputusan aksi selalu membaca state loading terkini dari sumber yang sama.
 - Tombol back fisik device dan tombol back UI sama-sama memakai `BrowserViewModel.requestBackNavigation()` untuk menghindari duplikasi logika.
 

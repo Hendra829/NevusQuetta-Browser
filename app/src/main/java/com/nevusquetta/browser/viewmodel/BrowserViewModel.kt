@@ -7,10 +7,12 @@ import java.net.IDN
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -42,16 +44,6 @@ class BrowserViewModel(
         extraBufferCapacity = 1,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    private val progressEvents = MutableSharedFlow<Int>(
-        // replay = 1 retains the latest progress value for a collector that has not subscribed
-        // yet. WebView progress callbacks run on the main thread and can call
-        // onProgressChanged() before the collectors started in `init` have been dispatched.
-        // With replay = 0 and no subscribers, tryEmit() reports success while the value is
-        // silently dropped, so debounced progress never reached the UI state.
-        replay = 1,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
     private val urlEvents = MutableSharedFlow<String>(
         extraBufferCapacity = 4,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
@@ -62,26 +54,9 @@ class BrowserViewModel(
     val commands = commandChannel.receiveAsFlow()
     val uiState: StateFlow<BrowserUiState> = _uiState.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            progressEvents
-                .distinctUntilChanged()
-                .debounce(progressDebounceMillis)
-                .collect { progress ->
-                    val safeProgress = progress.coerceIn(0, 100)
-                    _uiState.update { current ->
-                        if (!current.isLoading && safeProgress < current.progress) {
-                            return@update current
-                        }
-                        val nextLoading = if (safeProgress in 1..99) true else current.isLoading
-                        current.copy(
-                            isLoading = nextLoading,
-                            progress = safeProgress,
-                        )
-                    }
-                }
-        }
+    private var progressDebounceJob: Job? = null
 
+    init {
         viewModelScope.launch {
             urlEvents
                 .filter(String::isNotBlank)
@@ -121,6 +96,7 @@ class BrowserViewModel(
      */
     fun onPageStarted(url: String?) {
         emitUrl(url)
+        progressDebounceJob?.cancel()
         _uiState.update { current ->
             current.copy(
                 isLoading = true,
@@ -162,10 +138,29 @@ class BrowserViewModel(
     }
 
     /**
-     * Menerima progress mentah WebView yang nanti akan didebounce sebelum masuk ke UI state.
+     * Menerima progress mentah WebView yang didebounce sebelum masuk ke UI state.
+     *
+     * Debounce memakai cancel-and-delay berbasis Job supaya jendela debounce mulai tepat saat
+     * callback datang dan tidak ada nilai yang hilang di buffer. Sebelumnya progress dilewatkan
+     * MutableSharedFlow lossy (extraBufferCapacity = 1) sehingga event yang datang sebelum
+     * kolektor aktif hilang dan progres lama bisa tertahan di buffer.
      */
     fun onProgressChanged(progress: Int) {
-        progressEvents.tryEmit(progress)
+        val next = progress.coerceIn(0, 100)
+        progressDebounceJob?.cancel()
+        progressDebounceJob = viewModelScope.launch {
+            delay(progressDebounceMillis)
+            _uiState.update { current ->
+                if (!current.isLoading && next < current.progress) {
+                    return@update current
+                }
+                val nextLoading = if (next in 1..99) true else current.isLoading
+                current.copy(
+                    isLoading = nextLoading,
+                    progress = next,
+                )
+            }
+        }
     }
 
     /**

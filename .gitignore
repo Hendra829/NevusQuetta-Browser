@@ -1,16 +1,16 @@
-# Ignore Gradle project-specific cache directory
+# Gradle
 .gradle
 .idea
 local.properties
 
-# Ignore Gradle build output directory
+# Output build Gradle (termasuk sub-proyek seperti app/)
 build
 */build
 
-# Ignore Kotlin plugin data
+# Data plugin Kotlin
 .kotlin
 
-# Native build and Python artifacts
+# Hygiene repo (dari main)
 *.o
 C-Chromium/build/
 __pycache__/
