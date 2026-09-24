@@ -65,8 +65,8 @@ class ResumableDownloadWorker(
                     rawUrl = secret.url,
                     secret = secret,
                     offset = offset,
-                    etag = item.etag,
-                    lastModified = item.lastModified,
+                    currentEtag = item.etag,
+                    currentLastModified = item.lastModified,
                 )
                 val connection = response.connection
                 try {
@@ -88,16 +88,16 @@ class ResumableDownloadWorker(
                                 val responseEtag = connection.getHeaderField("ETag")
                                 val responseLastModified =
                                     connection.getHeaderField("Last-Modified")
-                                if (!etag.isNullOrBlank() &&
+                                if (!currentEtag.isNullOrBlank() &&
                                     !responseEtag.isNullOrBlank() &&
-                                    etag != responseEtag
+                                    currentEtag != responseEtag
                                 ) {
                                     error("RESUME_ETAG_CHANGED")
                                 }
-                                if (etag.isNullOrBlank() &&
-                                    !lastModified.isNullOrBlank() &&
+                                if (currentEtag.isNullOrBlank() &&
+                                    !currentLastModified.isNullOrBlank() &&
                                     !responseLastModified.isNullOrBlank() &&
-                                    lastModified != responseLastModified
+                                    currentLastModified != responseLastModified
                                 ) {
                                     error("RESUME_LAST_MODIFIED_CHANGED")
                                 }
@@ -245,8 +245,8 @@ class ResumableDownloadWorker(
         rawUrl: String,
         secret: DownloadSecret,
         offset: Long,
-        etag: String?,
-        lastModified: String?,
+        currentEtag: String?,
+        currentLastModified: String?,
     ): Response {
         val initial = DownloadPolicy.validateHttps(rawUrl)
             ?: error("INVALID_HTTPS_URL")
@@ -272,10 +272,10 @@ class ResumableDownloadWorker(
             }
             if (offset > 0L) {
                 connection.setRequestProperty("Range", "bytes=$offset-")
-                val strongEtag = etag
+                val strongEtag = currentEtag
                     ?.takeIf(String::isNotBlank)
                     ?.takeUnless { it.trimStart().startsWith("W/", ignoreCase = true) }
-                (strongEtag ?: lastModified)
+                (strongEtag ?: currentLastModified)
                     ?.takeIf(String::isNotBlank)
                     ?.let { connection.setRequestProperty("If-Range", it) }
             }
