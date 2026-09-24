@@ -42,4 +42,12 @@
     <string name="vault_action">Brankas</string>
     <string name="vault_lock_action">Kunci brankas</string>
     <string name="downloads_action">Unduhan</string>
+    <string name="downloads_empty">Belum ada unduhan</string>
+    <string name="metrics_title">Metrik performa</string>
+    <string name="bookmark_saved">Bookmark tersimpan</string>
+    <string name="bookmark_skipped_private">Bookmark tidak disimpan dari tab privat</string>
+    <string name="vault_title">Brankas</string>
+    <string name="vault_locked">Brankas terkunci</string>
+    <string name="vault_dek_cleared">DEK dihapus dari memori</string>
+    <string name="private_tab_unavailable">Tab privat tidak dapat dibuat pada perangkat ini</string>
 </resources>

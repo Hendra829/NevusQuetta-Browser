@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline — NevusQuetta</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b1220">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="icons/icon-192.png" alt="" width="32" height="32" class="brand-mark">
+    <span class="brand-name">NevusQuetta</span>
+    <span class="badge">offline</span>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <h1>Tidak ada koneksi</h1>
+    <p class="lede">
+      Halaman yang Anda minta tidak ada di cache dan jaringan tidak tersedia.
+      Shell aplikasi tetap berjalan — buka halaman yang pernah Anda kunjungi,
+      atau coba lagi setelah koneksi kembali.
+    </p>
+    <div class="actions">
+      <button class="btn primary" id="retryBtn" type="button">Coba lagi</button>
+      <a class="btn" href="index.html">Buka beranda</a>
+    </div>
+    <p class="hint" id="onlineHint"></p>
+  </section>
+</main>
+
+<footer class="footer"><span>NevusQuetta · mode offline</span></footer>
+
+<script src="app.js"></script>
+</body>
+</html>

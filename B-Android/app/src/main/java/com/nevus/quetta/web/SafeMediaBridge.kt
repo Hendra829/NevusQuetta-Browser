@@ -19,6 +19,20 @@ object SafeMediaBridge {
     const val MAX_PAYLOAD_BYTES = 16_384
     private val allowedHints = setOf("hls", "dash", "video", "audio", "unknown")
 
+    /**
+     * Memvalidasi pesan bridge media.
+     *
+     * AUDIT-REPORT.md A-SMB-01: versi sebelumnya hanya memeriksa bahwa kandidat
+     * memakai HTTPS dan TIDAK membandingkan origin kandidat dengan origin halaman.
+     * Akibatnya skrip dari situs mana pun (atau iframe pihak ketiga yang lolos ke
+     * main frame) dapat menyuruh aplikasi mengunduh URL CDN milik penyerang —
+     * bertentangan dengan invarian "normalized origin kandidat harus sama dengan
+     * top-level origin" yang tertulis di spesifikasi desain.
+     *
+     * Sekarang kandidat WAJIB se-origin dengan halaman. CDN lintas-origin yang
+     * sah tetap dapat diunduh lewat tombol unduh situs itu sendiri / melalui
+     * `DownloadListener`, sehingga tidak ada fungsionalitas yang hilang.
+     */
     fun validate(topLevel: Uri, payload: String): BridgeDecision {
         if (origin(topLevel) == null) return BridgeDecision.Rejected("invalid-top-level-origin")
         if (payload.toByteArray(Charsets.UTF_8).size > MAX_PAYLOAD_BYTES) {
@@ -34,6 +48,12 @@ object SafeMediaBridge {
         val candidate = runCatching { Uri.parse(url) }.getOrNull()
             ?: return BridgeDecision.Rejected("invalid-url")
         if (origin(candidate) == null) return BridgeDecision.Rejected("non-https-media")
+        if (candidate.encodedFragment != null) {
+            return BridgeDecision.Rejected("media-fragment-not-allowed")
+        }
+        if (!sameOrigin(topLevel, candidate)) {
+            return BridgeDecision.Rejected("cross-origin-media")
+        }
 
         val rawHint = json.optString("hint").trim().lowercase(Locale.US)
         val hint = rawHint.takeIf { it in allowedHints }

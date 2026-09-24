@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NevusQuetta — PWA</title>
+
+<!-- Manifest & branding -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0b1220">
+<meta name="color-scheme" content="dark">
+
+<!-- iOS / Safari: instal "Add to Home Screen" -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NevusQuetta">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+
+<!-- Android: tampilkan sebagai aplikasi mandiri bila ditambahkan ke home screen -->
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" href="icons/icon-192.png" type="image/png">
+
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Lompat ke konten utama</a>
+
+<header class="topbar">
+  <div class="brand">
+    <img src="icons/icon-192.png" alt="" width="32" height="32" class="brand-mark">
+    <span class="brand-name">NevusQuetta</span>
+    <span class="badge" id="verBadge">PWA</span>
+  </div>
+  <div class="status" id="netStatus" role="status" aria-live="polite">Memeriksa…</div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <h1>Browser privat, sekarang dapat dipasang</h1>
+    <p class="lede">
+      NevusQuetta menegakkan HTTPS-only, mengirim <strong>Global Privacy Control</strong>
+      (<code>Sec-GPC: 1</code>) pada setiap permintaan, memblokir pelacak sebelum
+      keluar jaringan, dan menolak izin sensitif secara default. Versi PWA bekerja
+      offline setelah kunjungan pertama dan dapat dipasang ke layar utama.
+    </p>
+    <div class="actions">
+      <button id="installBtn" class="btn primary" hidden>Pasang aplikasi</button>
+      <button id="offlineBtn" class="btn" type="button">Uji mode offline</button>
+    </div>
+    <p class="hint" id="installHint"></p>
+  </section>
+
+  <section class="grid" aria-label="Status instalabilitas">
+    <article class="card">
+      <h2>Instalabilitas</h2>
+      <ul class="checks" id="installChecks">
+        <li data-check="secure">Konteks aman (HTTPS/localhost)</li>
+        <li data-check="manifest">Manifest terbaca</li>
+        <li data-check="icons">Ikon 192 &amp; 512 tersedia</li>
+        <li data-check="sw">Service worker aktif</li>
+        <li data-check="display">Mode tampilan standalone</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <h2>Cache offline</h2>
+      <dl class="kv" id="cacheInfo">
+        <dt>Versi cache</dt><dd id="cacheVersion">—</dd>
+        <dt>Entri shell</dt><dd id="cacheShellCount">—</dd>
+        <dt>Entri aset</dt><dd id="cacheAssetCount">—</dd>
+      </dl>
+      <button id="clearCacheBtn" class="btn danger" type="button">Hapus semua cache</button>
+    </article>
+
+    <article class="card wide">
+      <h2>Invarian yang ditegakkan</h2>
+      <table class="table">
+        <thead><tr><th>Invarian</th><th>Ditegakkan oleh</th></tr></thead>
+        <tbody>
+          <tr><td>HTTPS-only untuk navigasi</td><td>Service worker (fallback) + kebijakan host</td></tr>
+          <tr><td><code>Sec-GPC: 1</code> setiap permintaan</td><td>Aplikasi induk (proxy) — tidak dapat dari PWA saja</td></tr>
+          <tr><td>Tidak menyimpan respons ber-<code>Set-Cookie</code></td><td><code>isCacheableResponse()</code></td></tr>
+          <tr><td>Tidak menyimpan lintas-origin</td><td><code>isCacheableResponse()</code></td></tr>
+          <tr><td>Update tidak otomatis tanpa persetujuan</td><td>Tanpa <code>skipWaiting()</code> pada install</td></tr>
+        </tbody>
+      </table>
+    </article>
+  </section>
+
+  <section class="card wide note">
+    <h2>Batas yang perlu diketahui</h2>
+    <p>
+      Sebuah PWA <strong>tidak dapat menjadi browser</strong>: ia tidak dapat menjadi
+      penangan protokol default, tidak dapat memblokir permintaan dari tab lain,
+      dan tidak dapat menetapkan header pada permintaan lintas-origin yang
+      dilakukan halaman pihak ketiga. Karena itu <code>Sec-GPC</code> pada PWA hanya
+      berlaku untuk permintaan same-origin yang lewat service worker ini.
+      PWA ini melengkapi — bukan menggantikan — aplikasi Android dan Chromium.
+    </p>
+  </section>
+</main>
+
+<footer class="footer">
+  <span>NevusQuetta <span id="year"></span> · Versi PWA <span id="buildVersion">1.0.0</span></span>
+  <span>Status SW: <span id="swState">belum terdaftar</span></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

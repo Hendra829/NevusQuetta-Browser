@@ -75,6 +75,20 @@ class BrowserCoordinator(
         repository.clearHistory()
     }
 
+    /**
+     * Menyimpan URL yang baru dinavigasi ke state tab.
+     *
+     * Dipakai `MainActivity.navigateOn` agar Activity tidak memutasi `TabManager`
+     * secara langsung — satu sumber kebenaran tetap coordinator. Persistensi ke
+     * Room sengaja TIDAK dilakukan di sini; itu tugas [pageFinished] setelah halaman
+     * benar-benar selesai dimuat, sehingga halaman gagal tidak mengotori riwayat.
+     */
+    suspend fun navigate(id: String, url: String) {
+        if (!url.startsWith("https://")) return
+        val before = tabs.tab(id) ?: return
+        tabs.updateNavigation(id, url, before.title)
+    }
+
     suspend fun resetSession() {
         tabs.reset(homeUrl)
         persistSession()
