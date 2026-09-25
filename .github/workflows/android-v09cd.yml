@@ -1,8 +1,11 @@
 name: Android V0.9CD Gate
 
 on:
+  # Gate ini juga harus jalan pada push ke main. Sebelumnya hanya `feat/v09cd`,
+  # sehingga PR #11 yang memperbaiki gate ini MASUK ke main tanpa pernah
+  # menjalankan gate-nya sendiri di main — regresi akan lolos tanpa terlihat.
   push:
-    branches: ["feat/v09cd"]
+    branches: ["feat/v09cd", "main", "release/**"]
     paths:
       - "B-Android/**"
       - ".github/workflows/android-v09cd.yml"
