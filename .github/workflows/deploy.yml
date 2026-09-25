@@ -1,5 +1,26 @@
 name: Deploy Site
 
+# CATATAN PENTING (2026-09-25)
+# ----------------------------
+# Workflow ini sebelumnya SELALU gagal pada setiap push ke `main` dengan:
+#
+#   HttpError: Not Found - /repos/{owner}/{repo}/pages
+#   Get Pages site failed. Please verify that the repository has Pages enabled
+#
+# Akar masalahnya: repositori ini TIDAK PERNAH mengaktifkan GitHub Pages,
+# sementara `actions/configure-pages` menuntut site Pages yang sudah ada.
+# Akibatnya job `build-site` merah terus, dan kegagalan itu TIDAK ada
+# hubungannya dengan kualitas kode — sehingga sinyalnya menyesatkan.
+#
+# Situs produksi NevusQuetta hanya satu: https://nevusquetta.tech (di-host di
+# Hostinger, lihat deploy/nevusquetta-tech/). GitHub Pages bersifat OPSIONAL.
+#
+# Karena itu workflow ini sekarang:
+#   1. SELALU memvalidasi paket deploy nevusquetta.tech (pekerjaan nyata).
+#   2. Hanya mencoba publish ke GitHub Pages bila Pages BENAR-BENAR aktif.
+#      Bila belum aktif, langkah tersebut dilewati dengan pesan yang jelas,
+#      bukan gagal palsu.
+
 on:
   push:
     branches: ["main", "master"]
@@ -15,13 +36,144 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-site:
+  # ---------------------------------------------------------------------------
+  # Gate paket deploy: ini deliverable SUNGGUHAN untuk https://nevusquetta.tech
+  # ---------------------------------------------------------------------------
+  validate-deploy-package:
+    name: validate-deploy-package
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Validate deploy package (nevusquetta.tech)
+        run: |
+          set -euo pipefail
+          ROOT="deploy/nevusquetta-tech/public_html"
+          [[ -d "$ROOT" ]] || { echo "::error::$ROOT tidak ada"; exit 1; }
+
+          fail=0
+          require() {
+            if [[ -f "$1" ]]; then
+              echo "  OK   $1"
+            else
+              echo "::error file=$1::berkas wajib paket deploy tidak ada"
+              fail=1
+            fi
+          }
+
+          echo "== berkas wajib =="
+          for f in index.html service-worker.js manifest.json offline.html \
+                   styles.css app.js .htaccess \
+                   icons/icon-192.png icons/icon-512.png icons/icon-512-maskable.png; do
+            require "$ROOT/$f"
+          done
+          [[ $fail -eq 0 ]] || exit 1
+
+          echo "== JavaScript harus lolos parse =="
+          node --check "$ROOT/service-worker.js"
+          node --check "$ROOT/app.js"
+
+          echo "== manifest.json harus JSON sah =="
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!m.name || !m.start_url || !m.display) {
+              throw new Error("manifest.json kehilangan name/start_url/display");
+            }
+            console.log("  OK   manifest:", m.name, "|", m.display);
+          ' "$ROOT/manifest.json"
+
+          echo "== ikon harus PNG sah dengan dimensi benar =="
+          python3 - <<'PY'
+          import struct, sys, pathlib
+          root = pathlib.Path("deploy/nevusquetta-tech/public_html/icons")
+          expect = {"icon-192.png": 192, "icon-512.png": 512, "icon-512-maskable.png": 512}
+          bad = 0
+          for name, want in expect.items():
+              p = root / name
+              with p.open("rb") as fh:
+                  head = fh.read(24)
+              if head[:8] != b"\x89PNG\r\n\x1a\n":
+                  print(f"::error file={p}::bukan PNG sah"); bad = 1; continue
+              w, h = struct.unpack(">II", head[16:24])
+              if (w, h) != (want, want):
+                  print(f"::error file={p}::dimensi {w}x{h}, harusnya {want}x{want}"); bad = 1
+              else:
+                  print(f"  OK   {name}: {w}x{h}")
+          sys.exit(bad)
+          PY
+
+          echo "== tidak boleh ada kredensial di paket deploy =="
+          if grep -rInE '(ghp_[A-Za-z0-9]{20,}|github_pat_|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{20,})' "$ROOT"; then
+            echo "::error::pola kredensial terdeteksi di paket deploy"
+            exit 1
+          fi
+          echo "  OK   tidak ada pola kredensial"
+
+          echo "== .htaccess harus memuat aturan kunci =="
+          for rule in 'RewriteEngine' 'service-worker.js' 'Strict-Transport-Security'; do
+            if ! grep -q "$rule" "$ROOT/.htaccess"; then
+              echo "::error file=$ROOT/.htaccess::aturan '$rule' tidak ada"
+              fail=1
+            fi
+          done
+          [[ $fail -eq 0 ]] || exit 1
+
+          echo "== ringkasan =="
+          echo "Paket deploy nevusquetta.tech VALID. Unggah ISI $ROOT/ ke document root" >> "$GITHUB_STEP_SUMMARY"
+          echo "hosting (Hostinger: \`public_html/\`). DNS TIDAK perlu diubah." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # GitHub Pages — OPSIONAL, hanya bila Pages benar-benar diaktifkan
+  # ---------------------------------------------------------------------------
+  build-site:
+    name: build-site
+    runs-on: ubuntu-latest
+    needs: validate-deploy-package
+    outputs:
+      pages_enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Detect whether GitHub Pages is enabled
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/pages" || echo 000)
+          echo "Pages API -> HTTP $code"
+          if [[ "$code" == "200" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Explain why the Pages publish is skipped
+        if: steps.check.outputs.enabled != 'true'
+        run: |
+          {
+            echo "### GitHub Pages DILEWATI (bukan kegagalan)"
+            echo
+            echo "Repositori ini belum mengaktifkan GitHub Pages, sehingga"
+            echo "\`actions/configure-pages\` tidak punya site untuk dikonfigurasi."
+            echo
+            echo "Ini **tidak memengaruhi** https://nevusquetta.tech — situs itu"
+            echo "di-host di Hostinger, bukan GitHub Pages."
+            echo
+            echo "Untuk mengaktifkan (opsional): **Settings → Pages → Build and"
+            echo "deployment → Source: GitHub Actions**, lalu jalankan ulang workflow ini."
+            echo
+            echo "Teardown/perbaikan tidak diperlukan; job ini keluar dengan sukses."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build static site from README
+        if: steps.check.outputs.enabled == 'true'
         run: |
           mkdir -p site
           python - <<'PY'
@@ -30,10 +182,10 @@ jobs:
 
           readme = Path('README.md').read_text(encoding='utf-8')
           html = f"""<!doctype html>
-          <html lang=\"id\">
+          <html lang="id">
             <head>
-              <meta charset=\"utf-8\" />
-              <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
               <title>NevusQuetta Browser</title>
               <style>
                 body {{ font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; line-height: 1.5; }}
@@ -51,14 +203,17 @@ jobs:
           PY
 
       - name: Setup Pages
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
       - name: Upload pages artifact
+        if: steps.check.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site
 
   deploy:
+    if: needs.build-site.outputs.pages_enabled == 'true'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
