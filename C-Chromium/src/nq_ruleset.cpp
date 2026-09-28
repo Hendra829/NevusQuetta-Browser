@@ -7,6 +7,7 @@
 #include <set>
 #include <sstream>
 
+#include "nq_jcs.h"
 #include "nq_json.h"
 #include "nq_sha256.h"
 
@@ -328,10 +329,20 @@ RulesetLoadResult Validate(const json::Value& root,
       return Fail(RulesetStatus::kSignatureAlgorithmUnsupported,
                   "algoritma tanda tangan '" + algorithm + "' tidak didukung");
     }
-    // Payload = seluruh berkas tanpa blok signature tidak mungkin dihitung di
-    // sini; verifier menerima teks penuh dan memutuskan sendiri. Verifier
-    // bertanggung jawab menolak bila canonic form tidak dikenali.
-    if (!options.verifier->Verify(text, signature_value, options.public_key)) {
+    // Payload tanda tangan = bentuk KANONIK (RFC 8785) dokumen TANPA blok
+    // "signature" itu sendiri. Tanpa langkah ini, urutan kunci / spasi / escape
+    // yang berbeda menghasilkan tanda tangan berbeda, dan penyuntingan kosmetik
+    // membatalkan tanda tangan yang sah. Bila kanonikalisasi gagal (JSON tidak
+    // sah, angka NaN/Infinity, UTF-8 tidak sah), ruleset DITOLAK — gagal-tertutup.
+    const jcs::Result canonical =
+        jcs::CanonicalizeWithoutMember(text, "signature");
+    if (!canonical.ok) {
+      return Fail(RulesetStatus::kSignatureInvalid,
+                  "payload ruleset tidak dapat dikanonikalisasi (RFC 8785): " +
+                      canonical.error);
+    }
+    if (!options.verifier->Verify(canonical.canonical, signature_value,
+                                  options.public_key)) {
       return Fail(RulesetStatus::kSignatureInvalid,
                   "verifikasi tanda tangan GAGAL");
     }
