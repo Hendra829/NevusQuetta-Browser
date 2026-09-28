@@ -50,7 +50,7 @@ jobs:
       - name: Build
         run: cmake --build C-Chromium/build -j"$(nproc)"
 
-      - name: Run ctest (4 suite)
+      - name: Run ctest (5 suite)
         run: ctest --test-dir C-Chromium/build --output-on-failure
 
       - name: Assert Ed25519 backend is ACTIVE (bukan gagal-tertutup)
@@ -65,6 +65,19 @@ jobs:
           # Self-test harus true.
           echo "$out" | grep -q "Ed25519SelfTest() == true"
           # Tidak boleh ada kegagalan.
+          echo "$out" | grep -q "0 gagal"
+
+      - name: Assert RFC 8785 canonicalization (JCS)
+        run: |
+          set -euo pipefail
+          out="$(./C-Chromium/build/nq_jcs_test)"
+          echo "$out"
+          # Vektor resmi RFC 8785 harus cocok persis.
+          echo "$out" | grep -q "contoh RFC 8785"
+          # Penyuntingan kosmetik TIDAK boleh membatalkan tanda tangan yang sah.
+          echo "$out" | grep -q "penyuntingan kosmetik"
+          # Perubahan isi WAJIB membatalkan tanda tangan.
+          echo "$out" | grep -q "perubahan isi -> tanda tangan DITOLAK"
           echo "$out" | grep -q "0 gagal"
 
       - name: Assert fail-closed path (build tanpa libsodium)
