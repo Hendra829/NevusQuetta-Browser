@@ -16,6 +16,63 @@ Karena tidak ada kredensial, langkah unggah harus dijalankan manual. Konfigurasi
 di paket ini sudah disiapkan supaya unggahan itu cukup **salin-tempel**, tanpa
 menyusun aturan cache/redirect dari nol.
 
+### Pemeriksaan domain 2026-09-29
+
+```
+$ curl -sS -I https://nevusquetta.tech/
+HTTP/1.1 200 OK
+Server: nginx
+Content-Type: text/html
+Content-Length: 349
+Last-Modified: Sat, 19 Sep 2026 10:52:28 GMT
+```
+
+Yang tersaji saat ini hanyalah **halaman placeholder 349 byte** ("Native Android
+browser release service"), bukan PWA. Seluruh berkas PWA masih **404**:
+
+```
+manifest.json          HTTP=404
+service-worker.js      HTTP=404
+icons/icon-192.png     HTTP=404
+icons/icon-512.png     HTTP=404
+```
+
+Kredensial tidak tersedia — dibuktikan dengan percobaan nyata, bukan asumsi:
+
+```
+$ ssh -o BatchMode=yes root@nevusquetta.tech 'echo MASUK'
+root@nevusquetta.tech: Permission denied (publickey,password).   SSH_EXIT=255
+
+$ curl -m 12 ftp://nevusquetta.tech/
+curl: (28) Failed to connect to nevusquetta.tech port 21 after 8001 ms
+
+$ ls ~/.ssh/ ~/.netrc ~/.git-credentials
+(kosong / tidak ada)
+```
+
+Port 22 terbuka tetapi menolak kunci kita. Rincian lengkap ada di
+**`VERIFIKASI-DEPLOY.md`**.
+
+## Cara tercepat: skrip siap-jalan
+
+```bash
+cd deploy/nevusquetta-tech
+
+# 1. Lihat dulu apa yang AKAN diunggah (tidak menulis apa pun)
+./deploy-pwa.sh --metode rsync --host user@server --kering
+
+# 2. Unggah sungguhan
+./deploy-pwa.sh --metode rsync --host user@server --tujuan /var/www/nevusquetta.tech/
+
+# 3. Verifikasi saja, tanpa unggah
+./deploy-pwa.sh --metode periksa
+```
+
+Metode: `rsync`, `scp`, `ftp` (lewat `lftp`), `lokal`, `periksa`.
+Skrip menolak berjalan (exit 2) bila perkakas/argumen kurang, dan keluar exit 1
+bila verifikasi pasca-unggah gagal. Jalur `lokal` sudah diuji nyata (10/10 md5
+cocok); jalur `rsync`/`scp`/`ftp` belum pernah dijalankan sampai selesai.
+
 ## Isi paket
 
 ```
