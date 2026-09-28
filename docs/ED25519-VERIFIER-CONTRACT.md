@@ -1,14 +1,15 @@
 # Kontrak Verifier Tanda Tangan Ruleset (Ed25519)
 
 Status: **verifikasi tanda tangan AKTIF lewat libsodium** (bila pustaka tersedia
-saat konfigurasi); **gagal-tertutup** bila tidak. Kanonikalisasi RFC 8785 masih
-belum dikerjakan — lihat §3.
+saat konfigurasi); **gagal-tertutup** bila tidak. Payload tanda tangan kini
+dikanonikalisasi menurut **RFC 8785 (JCS)** sebelum diverifikasi — lihat §3.
 
 Berkas terkait:
 
 | Berkas | Peran |
 |---|---|
 | `C-Chromium/src/nq_ed25519.h/.cpp` | Antarmuka + kerangka verifier |
+| `C-Chromium/src/nq_jcs.h/.cpp` | Kanonikalisasi JSON RFC 8785 (JCS) |
 | `C-Chromium/src/nq_ed25519_constants.h` | Konstanta kurva (DIBANGKITKAN, bukan diketik manual) |
 | `C-Chromium/src/nq_sha512.h/.cpp` | Primitif SHA-512 (RFC 8032 membutuhkannya) |
 | `C-Chromium/src/nq_ruleset.cpp` | Titik panggil verifier pada jalur pemuatan ruleset |
@@ -108,17 +109,26 @@ melempar eksepsi dan tidak menulis apa pun ke stdout.
 dan **tidak dapat dilonggarkan** oleh `allow_unsigned`, sehingga berkas yang
 berubah tidak akan pernah sampai ke tahap verifikasi tanda tangan.
 
-**Kanonikalisasi payload (kontrak saat ini):** verifier menerima **teks berkas
-apa adanya**. Konsekuensinya, tanda tangan harus dibuat atas byte identik dengan
-isi berkas — termasuk urutan kunci, spasi, dan baris baru.
+**Kanonikalisasi payload (kontrak saat ini):** sebelum diverifikasi, payload
+dikanonikalisasi menurut **RFC 8785 (JSON Canonicalization Scheme)** oleh
+`nq::jcs::CanonicalizeWithoutMember(text, "signature")`:
 
-> ⚠️ **Cacat yang harus ditutup sebelum rilis bertanda tangan:** teks apa adanya
-> berarti ruleset yang setara secara semantik tetapi berbeda format menghasilkan
-> tanda tangan berbeda, dan penyuntingan kosmetik membatalkan tanda tangan. Untuk
-> rilis bertanda tangan, ganti dengan **kanonikalisasi JSON** (RFC 8785), tandatangani
-> hasil kanonikalisasi, dan keluarkan blok `signature` dari payload sebelum
-> menghitung tanda tangan. Sampai itu dilakukan, jangan menandatangani ruleset
-> produksi.
+1. blok `signature` tingkat atas **dikeluarkan** dari payload (tanda tangan tidak
+   dapat dihitung atas dirinya sendiri);
+2. kunci objek diurutkan menurut code unit UTF-16 (RFC 8785 §3.2.3);
+3. ruang kosong antar token dibuang; string di-escape menurut ECMAScript;
+4. angka diserialkan dalam bentuk **terpendek yang bolak-balik tepat**
+   (RFC 8785 §3.2.2.3);
+5. urutan elemen array **tidak** diubah.
+
+Konsekuensinya, penyuntingan kosmetik (urutan kunci, spasi, escape) **tidak**
+membatalkan tanda tangan yang sah, sedangkan perubahan isi **selalu**
+membatalkannya. Bila kanonikalisasi gagal (JSON tidak sah, angka NaN/Infinity,
+UTF-8 tidak sah), ruleset **DITOLAK** — gagal-tertutup.
+
+> ✅ **Cacat "payload teks apa adanya" sudah ditutup** oleh `nq_jcs.cpp`.
+> Tanda tangan kini dihitung atas bentuk kanonik, bukan atas byte berkas apa
+> adanya. Lihat `docs/hardening/2026-09-29-rfc8785-jcs.md` untuk bukti eksekusi.
 
 ---
 
@@ -199,8 +209,10 @@ sehingga **wajib** ada lebih dulu sebelum implementasi dianggap layak rilis.
 - [x] Isi `Ed25519Verify()` (memakai libsodium yang sudah diaudit, bukan buatan sendiri).
 - [x] `Ed25519SelfTest()` mengembalikan `true` hanya setelah vektor TEST 1–3 lulus.
 - [x] Seluruh vektor negatif di §5 ditolak (pesan diubah, byte S diubah, S ≥ L).
-- [ ] Ganti payload "teks apa adanya" dengan kanonikalisasi RFC 8785 (§3). **BELUM.**
+- [x] Ganti payload "teks apa adanya" dengan kanonikalisasi RFC 8785 (§3).
 - [x] Tambahkan jalur unit test yang menjalankan vektor di atas di CI (`chromium-ctest.yml`).
+- [x] Uji kanonikalisasi RFC 8785 (`nq_jcs_test`): vektor resmi §3.2.2 + Appendix B,
+      bentuk setara → kanonik identik, perubahan isi → tanda tangan ditolak.
 - [ ] Sediakan jalur pembangkitan tanda tangan (di luar biner aplikasi) beserta
       prosedur penyimpanan kunci privat yang terpisah dari repo. **BELUM.**
 - [ ] Naikkan `schema`/`policy` bila semantik verifikasi berubah. **BELUM perlu.**

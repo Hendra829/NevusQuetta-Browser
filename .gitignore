@@ -2,3 +2,11 @@
 C-Chromium/build/
 __pycache__/
 nq-test-tmp/
+
+# Artefak build Android (dibangkitkan oleh gate; tidak boleh masuk repo)
+B-Android/build/
+B-Android/.gradle/
+B-Android/.kotlin/
+B-Android/app/.cxx/
+B-Android/app/build/
+B-Android/local.properties
