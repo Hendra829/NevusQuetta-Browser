@@ -1,52 +1,122 @@
 name: Deploy to srv1990895
 
+# Deploy PWA NevusQuetta ke VPS Hostinger srv1990895 (nevusquetta.tech).
+#
+# Rahasia yang WAJIB diisi di Settings -> Secrets and variables -> Actions:
+#   VPS_SSH_KEY  kunci privat Ed25519 (diisi manual oleh pemilik repo)
+#   VPS_HOST     srv1990895.hstgr.cloud  (atau 187.53.143.103)
+#   VPS_USER     root
+#   VPS_PATH     /var/www/nevusquetta.tech
+#
+# Kunci privat TIDAK PERNAH ditulis di berkas ini - hanya dibaca dari secrets.*.
+# Panduan pengisian: deploy/nevusquetta-tech/GITHUB-ACTIONS-SECRETS.md
+
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-srv1990895
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PATH: ${{ secrets.VPS_PATH }}
+      DOMAIN: nevusquetta.tech
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Build application when a build script exists
+      - name: Periksa rahasia wajib (gagal-tertutup)
         shell: bash
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          elif [ -f package.json ]; then
-            npm install
+          set -euo pipefail
+          hilang=0
+          for n in VPS_SSH_KEY VPS_HOST VPS_USER VPS_PATH; do
+            if [ -z "${!n:-}" ]; then
+              echo "::error::rahasia $n belum diisi di Settings -> Secrets and variables -> Actions"
+              hilang=1
+            fi
+          done
+          if [ "$hilang" -ne 0 ]; then
+            echo "::error::deploy DIBATALKAN - rahasia belum lengkap"
+            exit 1
           fi
-          if [ -f package.json ] && npm run | grep -qE '^  build'; then
-            npm run build
-          fi
+          echo "[v] keempat rahasia wajib tersedia"
 
-      - name: Configure SSH
+      - name: Siapkan kunci SSH
         shell: bash
         run: |
+          set -euo pipefail
           install -m 700 -d ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 600 ~/.ssh/known_hosts
+          echo "[v] kunci SSH disiapkan"
 
-      - name: Deploy files
+      - name: Uji koneksi SSH
         shell: bash
         run: |
-          if [ -d dist ]; then
-            SOURCE_DIR=dist/
-          elif [ -d build ]; then
-            SOURCE_DIR=build/
-          else
-            SOURCE_DIR=./
-          fi
-          rsync -az --delete --exclude='.git' --exclude='.github' "$SOURCE_DIR" "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_PATH }}/"
+          set -euo pipefail
+          ssh -o BatchMode=yes -o ConnectTimeout=20 "$VPS_USER@$VPS_HOST" 'hostname; id -un'
+          echo "[v] koneksi SSH berhasil"
 
-      - name: Validate and reload Nginx
+      - name: Sinkronkan PWA ke VPS
+        shell: bash
         run: |
-          ssh "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" 'nginx -t && systemctl reload nginx'
+          set -euo pipefail
+          SUMBER=deploy/nevusquetta-tech/public_html/
+          if [ ! -f "${SUMBER}index.html" ]; then
+            echo "::error::sumber PWA tidak ditemukan: ${SUMBER}index.html"
+            exit 1
+          fi
+          ssh -o BatchMode=yes "$VPS_USER@$VPS_HOST" "mkdir -p '$VPS_PATH'"
+          rsync -az --delete --chmod=D755,F644 \
+            -e "ssh -o BatchMode=yes" \
+            "$SUMBER" "$VPS_USER@$VPS_HOST:$VPS_PATH/"
+          echo "[v] berkas tersinkron ke $VPS_PATH"
+
+      - name: Validasi konfigurasi nginx (gagal-tertutup)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! ssh -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'nginx -t'; then
+            echo "::error::'nginx -t' GAGAL - nginx TIDAK akan direload"
+            exit 1
+          fi
+          echo "[v] 'nginx -t' LULUS"
+
+      - name: Reload nginx
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes "$VPS_USER@$VPS_HOST" 'systemctl reload nginx || nginx -s reload'
+          echo "[v] nginx direload"
+
+      - name: Verifikasi hasil
+        shell: bash
+        run: |
+          set -euo pipefail
+          gagal=0
+          for u in / /manifest.json /service-worker.js; do
+            kode="$(curl -sS -o /dev/null -w '%{http_code}' -m 25 "https://${DOMAIN}${u}" || echo 000)"
+            tipe="$(curl -sS -o /dev/null -w '%{content_type}' -m 25 "https://${DOMAIN}${u}" || echo -)"
+            echo "  ${u} -> HTTP=${kode} CT=${tipe}"
+            [ "$kode" = "200" ] || gagal=1
+          done
+          if [ "$gagal" -ne 0 ]; then
+            echo "::error::verifikasi gagal - ada URL yang tidak 200"
+            exit 1
+          fi
+          echo "[v] SEMUA VERIFIKASI LULUS"
