@@ -5,6 +5,13 @@
 # Jalankan DI DALAM VPS sebagai root:
 #   sudo bash install-vps.sh --kunci-publik "ssh-ed25519 AAAA... user@host"
 #
+# Opsi:
+#   --kunci-publik <kunci>  tambahkan kunci publik ke /root/.ssh/authorized_keys
+#   --webroot <path>        webroot nginx (default /var/www/html)
+#   --tanpa-pasang-nginx    jangan pasang nginx bila belum ada
+#   --tanpa-pasang-certbot  jangan pasang certbot
+#   --tanpa-deploy          jangan salin berkas PWA ke webroot
+#
 # Skrip ini GAGAL-TERTUTUP: setiap langkah diperiksa, dan `nginx -t` WAJIB
 # lulus SEBELUM reload. Bila `nginx -t` gagal, konfigurasi lama dipulihkan
 # dan skrip keluar tanpa menyentuh nginx yang sedang berjalan.
@@ -20,7 +27,10 @@ set -uo pipefail
 # Konfigurasi
 # ---------------------------------------------------------------------------
 DOMAIN="nevusquetta.tech"
-WEBROOT="/var/www/${DOMAIN}"
+# Webroot nginx yang BENAR-BENAR ada di VPS srv1990895 adalah /var/www/html.
+# Sebelumnya skrip memakai /var/www/nevusquetta.tech yang TIDAK ada di VPS,
+# sehingga nginx menyajikan 404. Ubah lewat --webroot bila VPS Anda berbeda.
+WEBROOT="/var/www/html"
 CONF_AVAIL="/etc/nginx/sites-available/${DOMAIN}"
 CONF_ENABLED="/etc/nginx/sites-enabled/${DOMAIN}"
 SNIPPET="/etc/nginx/snippets/nevusquetta-security-headers.conf"
@@ -50,6 +60,7 @@ judul(){ printf '\n%s=== %s ===%s\n' "$B" "$*" "$N"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --kunci-publik) PUBKEY="${2:-}"; shift 2 ;;
+    --webroot)              WEBROOT="${2:-}"; shift 2 ;;
     --tanpa-pasang-nginx)   PASANG_NGINX=0; shift ;;
     --tanpa-pasang-certbot) PASANG_CERTBOT=0; shift ;;
     --tanpa-deploy)         DEPLOY_PWA=0; shift ;;

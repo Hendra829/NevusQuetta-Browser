@@ -230,7 +230,7 @@ cd deploy/nevusquetta-tech
 ./deploy-pwa.sh --metode rsync --host user@server --kering
 
 # 2. Unggah sungguhan
-./deploy-pwa.sh --metode rsync --host user@server --tujuan /var/www/nevusquetta.tech/
+./deploy-pwa.sh --metode rsync --host user@server --tujuan /var/www/html/
 
 # 3. Verifikasi saja, tanpa unggah
 ./deploy-pwa.sh --metode periksa
@@ -249,8 +249,8 @@ Ringkasnya: hPanel → File Manager → document root → unggah **seluruh isi**
 ### 4.3 Cara manual — VPS nginx
 
 ```bash
-sudo mkdir -p /var/www/nevusquetta.tech
-sudo cp -r public_html/* /var/www/nevusquetta.tech/
+sudo mkdir -p /var/www/html
+sudo cp -r public_html/* /var/www/html/
 sudo cp nginx-nevusquetta.tech.conf /etc/nginx/sites-available/nevusquetta.tech
 sudo ln -sf /etc/nginx/sites-available/nevusquetta.tech \
             /etc/nginx/sites-enabled/nevusquetta.tech

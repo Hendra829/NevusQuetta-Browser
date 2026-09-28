@@ -2,14 +2,21 @@ name: Deploy to srv1990895
 
 # Deploy PWA NevusQuetta ke VPS Hostinger srv1990895 (nevusquetta.tech).
 #
-# Rahasia yang WAJIB diisi di Settings -> Secrets and variables -> Actions:
-#   VPS_SSH_KEY  kunci privat Ed25519 (diisi manual oleh pemilik repo)
-#   VPS_HOST     srv1990895.hstgr.cloud  (atau 187.53.143.103)
-#   VPS_USER     root
-#   VPS_PATH     /var/www/nevusquetta.tech
+# Rahasia di Settings -> Secrets and variables -> Actions:
+#   VPS_SSH_KEY  WAJIB  kunci privat Ed25519 (diisi manual oleh pemilik repo)
+#   VPS_HOST     WAJIB  srv1990895.hstgr.cloud  (atau 187.53.143.103)
+#   VPS_USER     WAJIB  root
+#   VPS_PATH     OPSIONAL - default /var/www/html (webroot nginx di VPS ini)
+#
+# PENTING - KUNCI YANG BENAR-BENAR TERPASANG DI VPS:
+#   Kunci publik yang ADA di /root/.ssh/authorized_keys VPS berkomentar
+#   `github-actions-nevusquetta`. Kunci `github-actions-deploy-nevusquetta`
+#   (fingerprint SHA256:1Sm4ryIjC/Qw4MzYukA+VwLYBnpQcgW/Mul9bjD3KLk) TIDAK
+#   terpasang di VPS - JANGAN isi VPS_SSH_KEY dengan kunci privat pasangannya
+#   sampai kunci publiknya benar-benar ditambahkan ke VPS.
+#   Rincian: deploy/nevusquetta-tech/GITHUB-ACTIONS-SECRETS.md
 #
 # Kunci privat TIDAK PERNAH ditulis di berkas ini - hanya dibaca dari secrets.*.
-# Panduan pengisian: deploy/nevusquetta-tech/GITHUB-ACTIONS-SECRETS.md
 
 on:
   push:
@@ -31,7 +38,9 @@ jobs:
       VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
-      VPS_PATH: ${{ secrets.VPS_PATH }}
+      # Default /var/www/html - webroot nginx yang benar-benar ada di VPS.
+      # Bila rahasia VPS_PATH diisi, nilai itu yang dipakai.
+      VPS_PATH: ${{ secrets.VPS_PATH || '/var/www/html' }}
       DOMAIN: nevusquetta.tech
     steps:
       - name: Checkout
@@ -42,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           hilang=0
-          for n in VPS_SSH_KEY VPS_HOST VPS_USER VPS_PATH; do
+          for n in VPS_SSH_KEY VPS_HOST VPS_USER; do
             if [ -z "${!n:-}" ]; then
               echo "::error::rahasia $n belum diisi di Settings -> Secrets and variables -> Actions"
               hilang=1
@@ -52,7 +61,8 @@ jobs:
             echo "::error::deploy DIBATALKAN - rahasia belum lengkap"
             exit 1
           fi
-          echo "[v] keempat rahasia wajib tersedia"
+          echo "[v] rahasia wajib tersedia"
+          echo "[i] VPS_PATH = $VPS_PATH"
 
       - name: Siapkan kunci SSH
         shell: bash
@@ -71,6 +81,32 @@ jobs:
           set -euo pipefail
           ssh -o BatchMode=yes -o ConnectTimeout=20 "$VPS_USER@$VPS_HOST" 'hostname; id -un'
           echo "[v] koneksi SSH berhasil"
+
+      - name: Cadangkan webroot lama (gagal-tertutup)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # /var/www/html adalah webroot default nginx dan mungkin berisi konten
+          # lain. rsync memakai --delete, jadi cadangan WAJIB sebelum menimpa.
+          ssh -o BatchMode=yes "$VPS_USER@$VPS_HOST" "
+            set -e
+            P='$VPS_PATH'
+            if [ -d \"\$P\" ] && [ -n \"\$(find \"\$P\" -mindepth 1 -maxdepth 1 2>/dev/null)\" ]; then
+              U=\$(du -sm \"\$P\" 2>/dev/null | awk '{print \$1}')
+              echo \"[i] ukuran webroot lama: \${U} MB\"
+              if [ \"\${U:-0}\" -gt 2048 ]; then
+                echo '[X] webroot > 2 GB - cadangan dibatalkan demi keamanan'
+                echo '[X] set rahasia VPS_PATH ke direktori khusus, mis. /var/www/nevusquetta.tech'
+                exit 1
+              fi
+              B=\"\${P}.bak.\$(date -u +%Y%m%dT%H%M%SZ)\"
+              cp -a \"\$P\" \"\$B\"
+              echo \"[v] cadangan dibuat: \$B\"
+            else
+              echo '[i] webroot kosong atau belum ada - tidak ada yang dicadangkan'
+            fi
+          "
+          echo "[v] langkah cadangan selesai"
 
       - name: Sinkronkan PWA ke VPS
         shell: bash

@@ -10,7 +10,7 @@
 #   ./deploy-pwa.sh --metode rsync  --host <user@host> [--tujuan /path]
 #   ./deploy-pwa.sh --metode scp    --host <user@host> [--tujuan /path]
 #   ./deploy-pwa.sh --metode ftp    --host <host> --user <u> [--tujuan /path]
-#   ./deploy-pwa.sh --metode lokal  --tujuan /var/www/nevusquetta.tech
+#   ./deploy-pwa.sh --metode lokal  --tujuan /var/www/html
 #   ./deploy-pwa.sh --metode periksa            # hanya verifikasi, tanpa unggah
 #
 # Opsi:
@@ -139,12 +139,12 @@ case "$METODE" in
   rsync)
     command -v rsync >/dev/null || { bad "rsync tidak terpasang"; exit 2; }
     [ -n "$HOST" ] || { bad "--host wajib untuk metode rsync"; exit 2; }
-    TUJUAN="${TUJUAN:-/var/www/$DOMAIN/}"
+    TUJUAN="${TUJUAN:-/var/www/html/}"
     ;;
   scp)
     command -v scp >/dev/null || { bad "scp tidak terpasang"; exit 2; }
     [ -n "$HOST" ] || { bad "--host wajib untuk metode scp"; exit 2; }
-    TUJUAN="${TUJUAN:-/var/www/$DOMAIN/}"
+    TUJUAN="${TUJUAN:-/var/www/html/}"
     ;;
   ftp)
     command -v lftp >/dev/null || { bad "lftp tidak terpasang (apt-get install -y lftp)"; exit 2; }
