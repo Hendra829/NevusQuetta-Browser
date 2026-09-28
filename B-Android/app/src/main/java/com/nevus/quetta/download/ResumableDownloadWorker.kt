@@ -88,16 +88,16 @@ class ResumableDownloadWorker(
                                 val responseEtag = connection.getHeaderField("ETag")
                                 val responseLastModified =
                                     connection.getHeaderField("Last-Modified")
-                                if (!etag.isNullOrBlank() &&
+                                if (!item.etag.isNullOrBlank() &&
                                     !responseEtag.isNullOrBlank() &&
-                                    etag != responseEtag
+                                    item.etag != responseEtag
                                 ) {
                                     error("RESUME_ETAG_CHANGED")
                                 }
-                                if (etag.isNullOrBlank() &&
-                                    !lastModified.isNullOrBlank() &&
+                                if (item.etag.isNullOrBlank() &&
+                                    !item.lastModified.isNullOrBlank() &&
                                     !responseLastModified.isNullOrBlank() &&
-                                    lastModified != responseLastModified
+                                    item.lastModified != responseLastModified
                                 ) {
                                     error("RESUME_LAST_MODIFIED_CHANGED")
                                 }
