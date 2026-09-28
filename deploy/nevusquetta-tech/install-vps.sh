@@ -28,6 +28,7 @@ SUMBER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUBKEY=""
 PASANG_NGINX=1
 PASANG_CERTBOT=1
+DEPLOY_PWA=1
 
 # ---------------------------------------------------------------------------
 # Warna & pembantu
@@ -51,6 +52,7 @@ while [ $# -gt 0 ]; do
     --kunci-publik) PUBKEY="${2:-}"; shift 2 ;;
     --tanpa-pasang-nginx)   PASANG_NGINX=0; shift ;;
     --tanpa-pasang-certbot) PASANG_CERTBOT=0; shift ;;
+    --tanpa-deploy)         DEPLOY_PWA=0; shift ;;
     -h|--help)
       sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0 ;;
@@ -144,6 +146,62 @@ fi
 judul "Webroot"
 mkdir -p "$WEBROOT"
 ok "webroot siap: $WEBROOT"
+
+# ---------------------------------------------------------------------------
+# Deploy berkas PWA ke webroot
+# ---------------------------------------------------------------------------
+# Tanpa langkah ini nginx menyajikan 404 untuk SELURUH berkas PWA dan
+# verifikasi di bawah PASTI gagal. Sebelumnya skrip hanya MENCETAK perintah
+# rsync dan tidak pernah menyalin berkasnya — celah nyata yang ditutup di sini.
+judul "Deploy berkas PWA"
+if [ "$DEPLOY_PWA" -eq 0 ]; then
+  warn "--tanpa-deploy dipakai — berkas PWA TIDAK disalin"
+elif [ ! -d "$SUMBER/public_html" ]; then
+  bad "direktori sumber tidak ditemukan: $SUMBER/public_html"
+  exit 2
+else
+  JUMLAH_SUMBER="$(find "$SUMBER/public_html" -type f | wc -l)"
+  if [ "$JUMLAH_SUMBER" -eq 0 ]; then
+    bad "public_html/ kosong — tidak ada yang disalin"
+    exit 2
+  fi
+  # Cadangkan webroot lama bila sudah berisi berkas (jangan menimpa destruktif).
+  if [ -n "$(find "$WEBROOT" -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
+    CADANGAN_WEB="${WEBROOT}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -a "$WEBROOT" "$CADANGAN_WEB"
+    info "cadangan webroot lama: $CADANGAN_WEB"
+  fi
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "$SUMBER/public_html/" "$WEBROOT/" || { bad "rsync gagal"; exit 1; }
+    ok "berkas disalin dengan rsync"
+  else
+    cp -a "$SUMBER/public_html/." "$WEBROOT/" || { bad "cp gagal"; exit 1; }
+    ok "berkas disalin dengan cp"
+  fi
+  # Izin: direktori 755, berkas 644, dimiliki root.
+  find "$WEBROOT" -type d -exec chmod 755 {} +
+  find "$WEBROOT" -type f -exec chmod 644 {} +
+  chown -R root:root "$WEBROOT" 2>/dev/null || true
+  ok "izin diset (dir 755, berkas 644)"
+  JUMLAH_TUJUAN="$(find "$WEBROOT" -type f | wc -l)"
+  if [ "$JUMLAH_TUJUAN" -eq "$JUMLAH_SUMBER" ]; then
+    ok "jumlah berkas cocok: $JUMLAH_TUJUAN"
+  else
+    bad "jumlah berkas TIDAK cocok: sumber=$JUMLAH_SUMBER tujuan=$JUMLAH_TUJUAN"
+    exit 1
+  fi
+  # Bandingkan md5 berkas kunci — bukti berkas benar-benar sampai.
+  BEDA=0
+  for f in index.html manifest.json service-worker.js; do
+    if [ -f "$SUMBER/public_html/$f" ]; then
+      a="$(md5sum "$SUMBER/public_html/$f" | awk '{print $1}')"
+      b="$(md5sum "$WEBROOT/$f" 2>/dev/null | awk '{print $1}')"
+      if [ "$a" = "$b" ]; then ok "md5 $f cocok ($a)"
+      else bad "md5 $f BEDA: sumber=$a tujuan=$b"; BEDA=$((BEDA+1)); fi
+    fi
+  done
+  [ "$BEDA" -eq 0 ] || { bad "$BEDA berkas kunci tidak cocok"; exit 1; }
+fi
 
 # ---------------------------------------------------------------------------
 # Snippet header keamanan
@@ -308,8 +366,7 @@ esac
 judul "Ringkasan"
 if [ "$GAGAL" -eq 0 ]; then
   ok "SEMUA VERIFIKASI LULUS"
-  info "langkah berikutnya: unggah isi public_html/ ke $WEBROOT"
-  info "  rsync -av public_html/ root@${DOMAIN}:${WEBROOT}/"
+  info "berkas PWA sudah terpasang di $WEBROOT"
   exit 0
 else
   bad "$GAGAL verifikasi GAGAL"
