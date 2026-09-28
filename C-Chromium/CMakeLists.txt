@@ -85,6 +85,7 @@ set(NQ_SOURCES
     src/nevus_client.cpp
     src/nq_bootstrap.cpp
     src/nq_ed25519.cpp
+    src/nq_jcs.cpp
     src/nq_json.cpp
     src/nq_privacy_policy.cpp
     src/nq_ruleset.cpp
@@ -98,6 +99,7 @@ set(NQ_HEADERS
     src/nq_bootstrap.h
     src/nq_ed25519.h
     src/nq_ed25519_constants.h
+    src/nq_jcs.h
     src/nq_json.h
     src/nq_privacy_policy.h
     src/nq_ruleset.h
@@ -215,6 +217,7 @@ if(NQ_BUILD_TESTS)
     set(NQ_TEST_CORE
         src/nq_bootstrap.cpp
         src/nq_ed25519.cpp
+        src/nq_jcs.cpp
         src/nq_json.cpp
         src/nq_privacy_policy.cpp
         src/nq_ruleset.cpp
@@ -234,8 +237,12 @@ if(NQ_BUILD_TESTS)
     # 4 suite. Akibatnya klaim "kebijakan digerakkan ruleset, bukan konstanta di
     # kode" tidak pernah dibuktikan oleh CI. Kini terdaftar.
     add_executable(nq_assets_test tests/nq_assets_test.cpp ${NQ_TEST_CORE})
+    # Uji kanonikalisasi JSON RFC 8785 (JCS). Menutup cacat "payload teks apa
+    # adanya": penyuntingan kosmetik tidak boleh membatalkan tanda tangan yang
+    # sah, sedangkan perubahan isi WAJIB membatalkannya.
+    add_executable(nq_jcs_test tests/nq_jcs_test.cpp ${NQ_TEST_CORE})
 
-    foreach(t nq_ruleset_test nq_sha512_test nq_ed25519_test nq_assets_test)
+    foreach(t nq_ruleset_test nq_sha512_test nq_ed25519_test nq_assets_test nq_jcs_test)
         target_include_directories(${t} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
         target_compile_options(${t} PRIVATE ${NQ_TEST_WARNINGS})
     endforeach()
@@ -243,7 +250,7 @@ if(NQ_BUILD_TESTS)
     # Target uji yang mengompilasi nq_ed25519.cpp memerlukan libsodium bila ada.
     # nq_sha512_test tidak menyertakannya, jadi sengaja tidak diberi tautan ini.
     if(NQ_HAVE_LIBSODIUM)
-        foreach(t nq_ruleset_test nq_ed25519_test nq_assets_test)
+        foreach(t nq_ruleset_test nq_ed25519_test nq_assets_test nq_jcs_test)
             target_compile_definitions(${t} PRIVATE NQ_HAVE_LIBSODIUM=1)
             target_include_directories(${t} PRIVATE "${NQ_SODIUM_INCLUDE_DIR}")
             target_link_libraries(${t} PRIVATE "${NQ_SODIUM_LIBRARY}")
@@ -258,6 +265,7 @@ if(NQ_BUILD_TESTS)
     add_test(NAME nq_ruleset_test COMMAND nq_ruleset_test)
     add_test(NAME nq_sha512_test COMMAND nq_sha512_test)
     add_test(NAME nq_ed25519_test COMMAND nq_ed25519_test)
+    add_test(NAME nq_jcs_test COMMAND nq_jcs_test)
 
     # nq_assets_test butuh DUA hal agar benar-benar hermetik:
     #   1. argumen eksplisit ke direktori assets -> tidak bergantung direktori
