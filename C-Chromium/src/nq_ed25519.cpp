@@ -4,6 +4,10 @@
 
 #include "nq_ed25519_constants.h"
 
+#if defined(NQ_HAVE_LIBSODIUM)
+#include <sodium.h>
+#endif
+
 namespace nq {
 namespace {
 
@@ -21,54 +25,135 @@ bool IsLessThanLE(const std::uint8_t* value, const std::uint32_t* limit) {
   return false;  // sama besar -> tidak kurang dari
 }
 
+#if defined(NQ_HAVE_LIBSODIUM)
+// Menyiapkan libsodium tepat sekali. sodium_init() mengembalikan >= 0 bila
+// berhasil; nilai negatif berarti pustaka tidak dapat dipakai dan verifikasi
+// HARUS gagal-tertutup.
+bool SodiumReady() {
+  static const bool ready = (sodium_init() >= 0);
+  return ready;
+}
+#endif
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// Inti kripto — BELUM DIIMPLEMENTASIKAN
+// Nama backend yang benar-benar dikompilasi
+// ---------------------------------------------------------------------------
+const char* Ed25519BackendName() {
+#if defined(NQ_HAVE_LIBSODIUM)
+  return "libsodium";
+#else
+  return "none";
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// Inti kripto
 // ---------------------------------------------------------------------------
 //
-// Sengaja dibiarkan gagal-tertutup. Mengembalikan true di sini akan membuat
-// setiap ruleset "bertanda tangan" diterima tanpa diperiksa, yaitu persis mode
-// kegagalan yang paling berbahaya.
+// Dua mode kompilasi:
 //
-// Untuk mengimplementasikan, ikuti algoritma RFC 8032 §5.1.7 dan vektor uji
-// §7.1 yang sudah dicatat di docs/ED25519-VERIFIER-CONTRACT.md. Bila tautan ke
-// pustaka yang sudah diaudit (libsodium / OpenSSL EVP_DigestVerify) dapat
-// diterima, itu pilihan yang lebih dapat dipertahankan daripada menulis
-// aritmetika kurva sendiri.
+//   NQ_HAVE_LIBSODIUM  -> verifikasi memakai crypto_sign_verify_detached()
+//                         dari libsodium (sudah diaudit). Ini yang dipakai
+//                         bila pustaka tersedia saat konfigurasi.
+//   tanpa libsodium    -> gagal-tertutup: SELALU false. Mengembalikan true di
+//                         sini akan membuat setiap ruleset "bertanda tangan"
+//                         diterima tanpa diperiksa, yaitu mode kegagalan yang
+//                         paling berbahaya.
+//
+// Pemeriksaan bentuk (y < p, S < L) tetap dijalankan lebih dulu di kedua mode:
+// ia menolak masukan yang jelas tidak sah sebelum menyentuh pustaka, dan
+// menutup malleability (RFC 8032 §8.4) secara eksplisit.
 bool Ed25519Verify(const std::uint8_t public_key[32],
                    const std::uint8_t* message, std::size_t message_len,
                    const std::uint8_t signature[64]) {
-  // Pemeriksaan bentuk tetap dijalankan: bila bentuknya sudah tidak sah, tidak
-  // ada gunanya melanjutkan, dan hasilnya pasti false.
   if (!Ed25519PublicKeyWellFormed(public_key) ||
       !Ed25519SignatureWellFormed(signature)) {
     return false;
   }
+#if defined(NQ_HAVE_LIBSODIUM)
+  if (!SodiumReady()) return false;
+  if (message == nullptr && message_len != 0) return false;
+  return crypto_sign_verify_detached(
+             signature, message, static_cast<unsigned long long>(message_len),
+             public_key) == 0;
+#else
   (void)message;
   (void)message_len;
-  return false;  // aritmetika kurva belum ada -> gagal-tertutup
+  return false;  // tidak ada backend -> gagal-tertutup
+#endif
 }
 
 bool Ed25519SelfTest() {
-  // Vektor resmi RFC 8032 §7.1 TEST 1: pesan kosong.
-  static const std::uint8_t kPublicKey[32] = {
-      0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe,
-      0xd3, 0xc9, 0x64, 0x07, 0x3a, 0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6,
-      0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a};
-  static const std::uint8_t kSignature[64] = {
-      0xe5, 0x56, 0x43, 0x00, 0xc3, 0x60, 0xac, 0x72, 0x90, 0x86, 0xe2,
-      0xcc, 0x80, 0x6e, 0x82, 0x8a, 0x84, 0x87, 0x7f, 0x1e, 0xb8, 0xe5,
-      0xd9, 0x74, 0xd8, 0x73, 0xe0, 0x65, 0x22, 0x49, 0x01, 0x55, 0x5f,
-      0xb8, 0x82, 0x15, 0x90, 0xa3, 0x3b, 0xac, 0xc6, 0x1e, 0x39, 0x70,
-      0x1c, 0xf9, 0xb4, 0x6b, 0xd2, 0x5b, 0xf5, 0xf0, 0x59, 0x5b, 0xbe,
-      0x24, 0x65, 0x51, 0x41, 0x43, 0x8e, 0x7a, 0x10, 0x0b};
+#if !defined(NQ_HAVE_LIBSODIUM)
+  return false;
+#else
+  if (!SodiumReady()) return false;
 
-  static const char kEmpty[] = "";
-  // Uji ini lulus hanya bila verifikasi tanda tangan sungguhan berhasil.
-  return Ed25519Verify(kPublicKey,
-                       reinterpret_cast<const std::uint8_t*>(kEmpty), 0,
-                       kSignature);
+  // Vektor resmi RFC 8032 §7.1 TEST 1-3. Uji ini memakai vektor resmi, bukan
+  // vektor buatan sendiri, sehingga tidak dapat "dibuat lulus".
+  struct Vector {
+    const char* public_key;
+    const char* message_hex;  // "" = pesan kosong
+    const char* signature;
+  };
+  static const Vector kVectors[] = {
+      // TEST 1 — pesan kosong
+      {"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "",
+       "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+       "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"},
+      // TEST 2 — pesan 1 byte (0x72)
+      {"3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "72",
+       "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da"
+       "085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00"},
+      // TEST 3 — pesan 2 byte (0xaf82)
+      {"fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", "af82",
+       "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac"
+       "18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a"},
+  };
+
+  for (const Vector& v : kVectors) {
+    std::uint8_t key[32];
+    std::uint8_t sig[64];
+    if (!HexToBytes(v.public_key, key, 32)) return false;
+    if (!HexToBytes(v.signature, sig, 64)) return false;
+
+    std::uint8_t message[8];
+    std::size_t message_len = 0;
+    const std::string msg_hex = v.message_hex;
+    if (!msg_hex.empty()) {
+      message_len = msg_hex.size() / 2;
+      if (message_len > sizeof(message)) return false;
+      if (!HexToBytes(msg_hex, message, message_len)) return false;
+    }
+
+    // Vektor positif WAJIB diterima.
+    if (!Ed25519Verify(key, message, message_len, sig)) return false;
+
+    // Vektor negatif WAJIB ditolak: satu bit pesan dibalik.
+    if (message_len > 0) {
+      std::uint8_t flipped[8];
+      std::memcpy(flipped, message, message_len);
+      flipped[0] ^= 0x01;
+      if (Ed25519Verify(key, flipped, message_len, sig)) return false;
+    }
+
+    // Vektor negatif WAJIB ditolak: satu byte S diubah.
+    std::uint8_t bad_s[64];
+    std::memcpy(bad_s, sig, 64);
+    bad_s[32] ^= 0x01;
+    if (Ed25519Verify(key, message, message_len, bad_s)) return false;
+
+    // Vektor negatif WAJIB ditolak: S >= L (malleability, RFC 8032 §8.4).
+    std::uint8_t s_ge_l[64];
+    std::memcpy(s_ge_l, sig, 64);
+    for (int i = 32; i < 64; ++i) s_ge_l[i] = 0xff;
+    if (Ed25519Verify(key, message, message_len, s_ge_l)) return false;
+  }
+
+  return true;
+#endif
 }
 
 // ---------------------------------------------------------------------------

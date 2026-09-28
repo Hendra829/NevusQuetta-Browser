@@ -108,6 +108,37 @@ set(NQ_HEADERS
 )
 
 # ---------------------------------------------------------------------------
+# Backend verifikasi Ed25519 (opsional, gagal-tertutup bila tidak ada)
+# ---------------------------------------------------------------------------
+# Verifikasi tanda tangan Ed25519 memakai libsodium (crypto_sign_verify_detached)
+# yang sudah diaudit, BUKAN aritmetika kurva buatan sendiri. Bila pustaka tidak
+# ditemukan, build TETAP BERHASIL tetapi verifikasi menjadi gagal-tertutup
+# (selalu false) dan setiap ruleset bertanda tangan DITOLAK. Nama backend yang
+# benar-benar dikompilasi dapat dibaca lewat nq::Ed25519BackendName().
+#
+#   cmake -S C-Chromium -B build -DNQ_REQUIRE_LIBSODIUM=ON   # gagal bila tidak ada
+option(NQ_REQUIRE_LIBSODIUM
+    "Gagalkan konfigurasi bila libsodium tidak ditemukan (untuk rilis bertanda tangan)" OFF)
+
+find_library(NQ_SODIUM_LIBRARY NAMES sodium libsodium)
+find_path(NQ_SODIUM_INCLUDE_DIR NAMES sodium.h)
+
+if(NQ_SODIUM_LIBRARY AND NQ_SODIUM_INCLUDE_DIR)
+    set(NQ_HAVE_LIBSODIUM ON)
+    message(STATUS "libsodium: DITEMUKAN -> verifikasi Ed25519 AKTIF (${NQ_SODIUM_LIBRARY})")
+else()
+    set(NQ_HAVE_LIBSODIUM OFF)
+    if(NQ_REQUIRE_LIBSODIUM)
+        message(FATAL_ERROR
+            "NQ_REQUIRE_LIBSODIUM=ON tetapi libsodium tidak ditemukan. "
+            "Pasang libsodium-dev (Debian/Ubuntu) atau libsodium (brew).")
+    endif()
+    message(WARNING
+        "libsodium TIDAK ditemukan -> verifikasi Ed25519 gagal-tertutup "
+        "(ruleset bertanda tangan DITOLAK). Pasang libsodium-dev untuk mengaktifkan.")
+endif()
+
+# ---------------------------------------------------------------------------
 # Target aplikasi — hanya bila CEF tersedia (pola resmi CEF)
 # ---------------------------------------------------------------------------
 if(NQ_BUILD_CEF_APP)
@@ -127,6 +158,12 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     NQ_ALLOW_UNSIGNED_RULESET=$<BOOL:${NQ_ALLOW_UNSIGNED_RULESET}>
     WRAPPING_CEF_SHARED=1
 )
+
+if(NQ_HAVE_LIBSODIUM)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE NQ_HAVE_LIBSODIUM=1)
+    target_include_directories(${PROJECT_NAME} PRIVATE "${NQ_SODIUM_INCLUDE_DIR}")
+    target_link_libraries(${PROJECT_NAME} PRIVATE "${NQ_SODIUM_LIBRARY}")
+endif()
 
 # ---------------------------------------------------------------------------
 # Tautan platform (pola standar distribusi CEF)
@@ -203,6 +240,16 @@ if(NQ_BUILD_TESTS)
         target_compile_options(${t} PRIVATE ${NQ_TEST_WARNINGS})
     endforeach()
 
+    # Target uji yang mengompilasi nq_ed25519.cpp memerlukan libsodium bila ada.
+    # nq_sha512_test tidak menyertakannya, jadi sengaja tidak diberi tautan ini.
+    if(NQ_HAVE_LIBSODIUM)
+        foreach(t nq_ruleset_test nq_ed25519_test nq_assets_test)
+            target_compile_definitions(${t} PRIVATE NQ_HAVE_LIBSODIUM=1)
+            target_include_directories(${t} PRIVATE "${NQ_SODIUM_INCLUDE_DIR}")
+            target_link_libraries(${t} PRIVATE "${NQ_SODIUM_LIBRARY}")
+        endforeach()
+    endif()
+
     # CATATAN: tidak ada add_test yang mengandalkan flag khusus di sini. Biner
     # uji sudah menjalankan jalur gagal-keras di dalam dirinya sendiri; menambah
     # add_test dengan argumen yang tidak dikenali biner hanya akan menghasilkan
@@ -241,6 +288,11 @@ else()
     message(STATUS "  cef         : TIDAK ADA (mode modul & uji mandiri)")
 endif()
 message(STATUS "  ruleset     : ${NQ_BLOCKED_HOSTS_ASSET}")
+if(NQ_HAVE_LIBSODIUM)
+    message(STATUS "  ed25519     : libsodium (verifikasi AKTIF)")
+else()
+    message(STATUS "  ed25519     : TIDAK ADA backend (gagal-tertutup)")
+endif()
 if(NOT NQ_ALLOW_UNSIGNED_RULESET)
     message(STATUS "  ruleset unsigned: DITOLAK (build rilis)")
 else()

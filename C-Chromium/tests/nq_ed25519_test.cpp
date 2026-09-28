@@ -119,16 +119,56 @@ int main() {
           "tanda tangan dengan S sangat besar ditolak");
   }
 
-  // --- Kripto belum ada: WAJIB menolak, bukan menerima ------------------
+  // --- Backend nyata: verifikasi tanda tangan SUNGGUHAN -------------------
+  //
+  // Uji ini backend-aware. Bila libsodium dikompilasi (NQ_HAVE_LIBSODIUM),
+  // verifikasi tanda tangan sungguhan WAJIB berhasil dan vektor negatif WAJIB
+  // ditolak. Bila tidak, verifikasi WAJIB gagal-tertutup. Keduanya diperiksa,
+  // sehingga tidak ada keadaan yang "lulus" secara palsu.
   {
+    const char* backend = nq::Ed25519BackendName();
+    std::printf("  backend verifikasi: %s\n", backend);
+    const bool have_backend = std::string(backend) == "libsodium";
+
     const char* payload = "";
-    Check(!nq::Ed25519Verify(g_key,
-                             reinterpret_cast<const std::uint8_t*>(payload), 0,
-                             g_sig),
-          "Ed25519Verify menolak saat aritmetika kurva belum ada (gagal-tertutup)");
-    Check(!nq::Ed25519SelfTest(),
-          "Ed25519SelfTest() == false (kripto belum sehat) -> ruleset bertanda "
-          "tangan ditolak");
+    const bool verified = nq::Ed25519Verify(
+        g_key, reinterpret_cast<const std::uint8_t*>(payload), 0, g_sig);
+
+    if (have_backend) {
+      Check(verified,
+            "libsodium: tanda tangan RFC 8032 TEST 1 DITERIMA (verifikasi nyata)");
+      Check(nq::Ed25519SelfTest(),
+            "Ed25519SelfTest() == true (backend nyata + vektor resmi lulus)");
+
+      // Vektor negatif: pesan berbeda -> WAJIB ditolak.
+      const std::uint8_t one_byte[1] = {0x72};
+      Check(!nq::Ed25519Verify(g_key, one_byte, 1, g_sig),
+            "libsodium: pesan berbeda -> tanda tangan DITOLAK");
+
+      // Vektor negatif: byte S diubah -> WAJIB ditolak.
+      std::uint8_t bad_s[64];
+      for (int i = 0; i < 64; ++i) bad_s[i] = g_sig[i];
+      bad_s[32] ^= 0x01;
+      Check(!nq::Ed25519Verify(g_key,
+                               reinterpret_cast<const std::uint8_t*>(payload), 0,
+                               bad_s),
+            "libsodium: byte S diubah -> tanda tangan DITOLAK");
+
+      // Vektor negatif: S >= L -> WAJIB ditolak (malleability).
+      std::uint8_t s_ge_l[64];
+      for (int i = 0; i < 64; ++i) s_ge_l[i] = g_sig[i];
+      for (int i = 32; i < 64; ++i) s_ge_l[i] = 0xff;
+      Check(!nq::Ed25519Verify(g_key,
+                               reinterpret_cast<const std::uint8_t*>(payload), 0,
+                               s_ge_l),
+            "libsodium: S >= L -> tanda tangan DITOLAK (malleability)");
+    } else {
+      Check(!verified,
+            "tanpa backend: Ed25519Verify menolak (gagal-tertutup)");
+      Check(!nq::Ed25519SelfTest(),
+            "tanpa backend: Ed25519SelfTest() == false -> ruleset bertanda "
+            "tangan ditolak");
+    }
   }
 
   // --- Ed25519RulesetVerifier --------------------------------------------
@@ -136,8 +176,11 @@ int main() {
     const nq::Ed25519RulesetVerifier verifier;
     Check(verifier.algorithm() == "ed25519",
           "algorithm() melaporkan \"ed25519\"");
+    // Payload "{}" BUKAN pesan yang ditandatangani TEST 1 (pesan kosong), jadi
+    // verifier WAJIB menolak pada KEDUA mode. Ini menguji jalur verifier,
+    // bukan backend.
     Check(!verifier.Verify("{}", kTest1Sig, kTest1Key),
-          "Verify menolak (kripto belum ada) meski hex sah");
+          "Verify menolak payload yang tidak cocok dengan tanda tangan");
     Check(!verifier.Verify("{}", "bukan-hex", kTest1Key),
           "Verify menolak tanda tangan non-hex");
     Check(!verifier.Verify("{}", kTest1Sig, "bukan-hex"),
@@ -151,10 +194,5 @@ int main() {
   }
 
   std::printf("  ---\n  %d pemeriksaan, %d gagal\n", g_total, g_fail);
-  if (g_fail != 0) {
-    std::printf("\nCATATAN: kegagalan di atas WAJAR bila aritmetika kurva belum\n"
-                "diimplementasikan, TETAPI hanya untuk pemeriksaan yang memang\n"
-                "bergantung padanya. Lihat docs/ED25519-VERIFIER-CONTRACT.md.\n");
-  }
   return g_fail == 0 ? 0 : 1;
 }
