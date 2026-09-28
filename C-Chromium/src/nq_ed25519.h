@@ -12,14 +12,18 @@
 //
 //   TERIMPLEMENTASI  : penguraian hex, pemeriksaan well-formedness kunci publik
 //                      (y < p) dan tanda tangan (S < L), self-test, integrasi
-//                      ke jalur pemuatan ruleset.
-//   BELUM ADA        : aritmetika kurva (decompress titik, scalar
-//                      multiplication, adisi lengkap). Tanpa itu,
-//                      Ed25519Verify() selalu mengembalikan false.
+//                      ke jalur pemuatan ruleset, DAN verifikasi tanda tangan
+//                      sungguhan lewat libsodium (crypto_sign_verify_detached)
+//                      bila pustaka tersedia saat konfigurasi.
+//   BERGANTUNG BUILD : aritmetika kurva TIDAK ditulis sendiri. Bila libsodium
+//                      tidak ditemukan, NQ_HAVE_LIBSODIUM tidak didefinisikan
+//                      dan Ed25519Verify() kembali gagal-tertutup (selalu
+//                      false). Nama backend yang benar-benar dikompilasi dapat
+//                      dibaca lewat Ed25519BackendName().
 //
-// Karena Ed25519Verify() selalu false, setiap ruleset dengan "signed": true
-// DITOLAK. Itu perilaku yang BENAR untuk keadaan ini: gagal-tertutup. Aplikasi
-// tetap berjalan, tetapi belum bisa memakai ruleset bertanda tangan.
+// Karena itu, pada build TANPA libsodium setiap ruleset dengan "signed": true
+// DITOLAK. Itu perilaku yang BENAR: gagal-tertutup. Aplikasi tetap berjalan,
+// hanya belum bisa memakai ruleset bertanda tangan.
 //
 // Kontrak lengkap, algoritma, vektor uji RFC 8032, dan checklist sebelum rilis
 // bertanda tangan: docs/ED25519-VERIFIER-CONTRACT.md
@@ -29,10 +33,15 @@ namespace nq {
 // Inti kripto
 // ---------------------------------------------------------------------------
 
+// Nama backend verifikasi yang benar-benar dikompilasi: "libsodium" bila
+// NQ_HAVE_LIBSODIUM aktif, "none" bila tidak. Dipakai log startup dan laporan
+// agar tidak ada klaim "sudah terverifikasi" tanpa backend nyata.
+const char* Ed25519BackendName();
+
 // Memverifikasi tanda tangan Ed25519 (RFC 8032 PureEdDSA).
 //
-// Mengembalikan true HANYA bila tanda sah. Saat ini SELALU false karena
-// aritmetika kurva belum diimplementasikan — lihat nq_ed25519.cpp.
+// Mengembalikan true HANYA bila tanda sah. Bila build tidak menyertakan
+// libsodium, SELALU false (gagal-tertutup) — lihat nq_ed25519.cpp.
 //
 // public_key : 32 byte, titik terkompresi (y little-endian, bit 255 = tanda x)
 // message    : byte pesan apa adanya
@@ -41,13 +50,14 @@ bool Ed25519Verify(const std::uint8_t public_key[32],
                    const std::uint8_t* message, std::size_t message_len,
                    const std::uint8_t signature[64]);
 
-// Menjalankan vektor uji RFC 8032 §7.1 TEST 1 (pesan kosong) terhadap
-// Ed25519Verify(). WAJIB dipanggil sekali saat startup.
+// Menjalankan vektor uji RFC 8032 §7.1 TEST 1-3 (positif DAN negatif)
+// terhadap Ed25519Verify(). WAJIB dipanggil sekali saat startup.
 //
-// Nilai sekarang: false (kripto belum ada). Nilai ini akan otomatis menjadi
-// true begitu aritmetika kurva diimplementasikan dengan benar, karena uji ini
-// memakai vektor resmi, bukan vektor buatan sendiri. Inilah cara kontrak ini
-// menahan diri dari "kelihatan sudah jadi".
+// Mengembalikan true HANYA bila backend nyata tersedia DAN ketiga vektor resmi
+// lulus, termasuk vektor negatif (bit pesan dibalik, byte S diubah, S >= L).
+// Pada build tanpa libsodium nilainya false — dan itu memang benar, karena
+// verifikasi tanda tangan tidak tersedia. Uji ini memakai vektor resmi, bukan
+// vektor buatan sendiri, sehingga tidak dapat "dibuat lulus".
 bool Ed25519SelfTest();
 
 // ---------------------------------------------------------------------------

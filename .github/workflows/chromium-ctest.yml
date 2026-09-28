@@ -1,0 +1,81 @@
+name: Chromium module tests (ctest)
+
+# Gate uji modul C-Chromium TANPA CEF.
+#
+# Kenapa workflow ini ada: sebelum ini TIDAK ADA workflow yang membangun dan
+# menjalankan uji C++ sama sekali. ci.yml hanya menangani proyek Node.js, dan
+# workflow android-*.yml hanya menangani modul Android. Akibatnya klaim
+# "ctest 4/4" dan "verifikasi Ed25519" tidak pernah dibuktikan oleh CI.
+#
+# Workflow ini menutup celah itu: ia memasang libsodium, membangun seluruh
+# target uji, menjalankan ctest, DAN menegaskan backend Ed25519 benar-benar
+# aktif (bukan gagal-tertutup) supaya "hijau" tidak bisa berarti "tidak diuji".
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "C-Chromium/**"
+      - ".github/workflows/chromium-ctest.yml"
+  pull_request:
+    paths:
+      - "C-Chromium/**"
+      - ".github/workflows/chromium-ctest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chromium-ctest-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ctest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install toolchain + libsodium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake libsodium-dev
+
+      - name: Configure (libsodium WAJIB ada)
+        run: |
+          cmake -S C-Chromium -B C-Chromium/build -DNQ_REQUIRE_LIBSODIUM=ON
+
+      - name: Build
+        run: cmake --build C-Chromium/build -j"$(nproc)"
+
+      - name: Run ctest (4 suite)
+        run: ctest --test-dir C-Chromium/build --output-on-failure
+
+      - name: Assert Ed25519 backend is ACTIVE (bukan gagal-tertutup)
+        run: |
+          set -euo pipefail
+          out="$(./C-Chromium/build/nq_ed25519_test)"
+          echo "$out"
+          # Backend harus libsodium, bukan "none".
+          echo "$out" | grep -q "backend verifikasi: libsodium"
+          # Verifikasi tanda tangan sungguhan harus DITERIMA.
+          echo "$out" | grep -q "TEST 1 DITERIMA"
+          # Self-test harus true.
+          echo "$out" | grep -q "Ed25519SelfTest() == true"
+          # Tidak boleh ada kegagalan.
+          echo "$out" | grep -q "0 gagal"
+
+      - name: Assert fail-closed path (build tanpa libsodium)
+        run: |
+          set -euo pipefail
+          # Kompilasi ulang TANPA NQ_HAVE_LIBSODIUM: verifikasi harus menolak.
+          g++ -std=c++17 -Wall -Wextra -Werror -IC-Chromium/src \
+            -o /tmp/ed_failclosed \
+            C-Chromium/tests/nq_ed25519_test.cpp C-Chromium/src/nq_ed25519.cpp
+          out="$(/tmp/ed_failclosed)"
+          echo "$out"
+          echo "$out" | grep -q "backend verifikasi: none"
+          echo "$out" | grep -q "gagal-tertutup"
+          echo "$out" | grep -q "0 gagal"

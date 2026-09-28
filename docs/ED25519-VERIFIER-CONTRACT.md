@@ -1,8 +1,8 @@
 # Kontrak Verifier Tanda Tangan Ruleset (Ed25519)
 
-Status: **kerangka terpasang, aritmetika kurva belum diimplementasikan** — sengaja,
-dan gagal-tertutup. Dokumen ini adalah kontrak yang harus dipenuhi bila inti
-tersebut nanti diisi.
+Status: **verifikasi tanda tangan AKTIF lewat libsodium** (bila pustaka tersedia
+saat konfigurasi); **gagal-tertutup** bila tidak. Kanonikalisasi RFC 8785 masih
+belum dikerjakan — lihat §3.
 
 Berkas terkait:
 
@@ -25,13 +25,16 @@ Dipisahkan tegas antara yang **terbukti lewat eksekusi** dan yang **belum ada**.
 | Primitif SHA-512 (FIPS 180-4) | ✅ **Teruji eksekusi** | 18/18 pemeriksaan lulus; vektor dari `hashlib.sha512` pada panjang 0,1,55,56,111,112,113,127,128,129,255,256,1000 + uji umpan bertahap + uji idempoten |
 | Konstanta kurva Ed25519 | ✅ **Teruji eksekusi** | `tools/gen_ed25519_constants.py`: 15/15 pemeriksaan lulus (d pada kurva, √−1² = −1, titik basis `5866…66`, eksponen inversi & akar kuadrat) |
 | Konstanta SHA-512 `K[t]` | ✅ **Teruji eksekusi** | Dihitung eksak via akar kubik bilangan besar; seluruh implementasi SHA-512 kemudian dibuktikan lewat vektor |
-| **Aritmetika kurva Ed25519** (decompress titik, scalar multiplication, adisi lengkap) | ❌ **BELUM ADA** | Tidak diimplementasikan pada rilis ini |
-| Verifikasi tanda tangan end-to-end | ❌ **BELUM ADA** | Bergantung pada baris di atas |
+| **Aritmetika kurva Ed25519** (decompress titik, scalar multiplication, adisi lengkap) | ✅ **Teruji eksekusi (lewat libsodium)** | Tidak ditulis sendiri; memakai `crypto_sign_verify_detached` dari libsodium 1.0.18. Bila libsodium tidak ada, kembali gagal-tertutup |
+| Verifikasi tanda tangan end-to-end | ✅ **Teruji eksekusi** | 25/25 pemeriksaan lulus dengan backend libsodium: vektor RFC 8032 §7.1 TEST 1 diterima; pesan berbeda, byte S diubah, dan S ≥ L ditolak. Tanpa libsodium: 22/22 lulus, backend `none`, `nm` = 0 simbol sodium |
 | Integrasi verifier ke jalur pemuatan ruleset | ✅ **Terpasang** | `nq_ruleset.cpp` memanggil `RulesetSignatureVerifier::Verify()`; hasil `false` → `kSignatureInvalid` |
 
-**Konsekuensi praktis:** setiap ruleset dengan `"signed": true` **DITOLAK**.
-Aplikasi tetap aman (gagal-tertutup), tetapi belum dapat memakai ruleset
-bertanda tangan. Ini keadaan yang jujur, bukan bug.
+**Konsekuensi praktis:** pada build **dengan** libsodium, ruleset bertanda
+tangan dapat diverifikasi. Pada build **tanpa** libsodium, setiap ruleset dengan
+`"signed": true` **DITOLAK** (gagal-tertutup). Nama backend yang benar-benar
+dikompilasi dapat dibaca lewat `nq::Ed25519BackendName()` (`"libsodium"` atau
+`"none"`). Gunakan `-DNQ_REQUIRE_LIBSODIUM=ON` untuk rilis bertanda tangan agar
+konfigurasi gagal bila pustaka tidak ada.
 
 ---
 
@@ -193,11 +196,12 @@ sehingga **wajib** ada lebih dulu sebelum implementasi dianggap layak rilis.
 
 ## 6. Checklist sebelum rilis bertanda tangan
 
-- [ ] Isi `Ed25519Verify()` (pustaka yang diaudit lebih disukai daripada buatan sendiri).
-- [ ] `Ed25519SelfTest()` mengembalikan `true` hanya setelah ketiga vektor TEST 1–3 lulus.
-- [ ] Seluruh vektor negatif di §5 ditolak.
-- [ ] Ganti payload "teks apa adanya" dengan kanonikalisasi RFC 8785 (§3).
-- [ ] Tambahkan jalur unit test yang menjalankan vektor di atas di CI.
+- [x] Isi `Ed25519Verify()` (memakai libsodium yang sudah diaudit, bukan buatan sendiri).
+- [x] `Ed25519SelfTest()` mengembalikan `true` hanya setelah vektor TEST 1–3 lulus.
+- [x] Seluruh vektor negatif di §5 ditolak (pesan diubah, byte S diubah, S ≥ L).
+- [ ] Ganti payload "teks apa adanya" dengan kanonikalisasi RFC 8785 (§3). **BELUM.**
+- [x] Tambahkan jalur unit test yang menjalankan vektor di atas di CI (`chromium-ctest.yml`).
 - [ ] Sediakan jalur pembangkitan tanda tangan (di luar biner aplikasi) beserta
-      prosedur penyimpanan kunci privat yang terpisah dari repo.
-- [ ] Naikkan `schema`/`policy` bila semantik verifikasi berubah.
+      prosedur penyimpanan kunci privat yang terpisah dari repo. **BELUM.**
+- [ ] Naikkan `schema`/`policy` bila semantik verifikasi berubah. **BELUM perlu.**
+- [ ] Verifikasi ruleset produksi bertanda tangan end-to-end. **BELUM.**
